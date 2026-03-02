@@ -1,0 +1,41 @@
+[project]
+name = "vigil"
+version = "0.3.0"
+description = "Vigil MCP — Constellation core tools + services (filesystem, git, shell, domains, mail, calendar, contacts, storage, entity store)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=2.0.0",
+    "uvicorn>=0.30.0",
+    # Database (entity store, absorbed from Store)
+    "asyncpg>=0.30.0",
+    # Google API services (mail, calendar, contacts, storage)
+    "google-api-python-client>=2.0.0",
+    "google-auth-httplib2>=0.1.0",
+    "google-auth-oauthlib>=1.0.0",
+    # Supernote
+    "supernotelib>=0.5.0",
+    "PyMuPDF>=1.23.0",
+    "reportlab>=4.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["tools", "core", "services", "services.mail", "services.mail.adapters",
+            "services.calendarservice", "services.calendarservice.adapters",
+            "services.contacts", "services.contacts.adapters",
+            "services.storage", "services.storage.adapters",
+            "services.supernote"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

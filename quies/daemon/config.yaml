@@ -1,0 +1,54 @@
+# Somnia Daemon Configuration
+
+# Consolidation triggers
+consolidation:
+  min_inbox_items: 1
+
+# Dream scheduler (background thread)
+scheduler:
+  enabled: true
+  check_interval_minutes: 15        # how often to check if dreaming is needed
+  global_cooldown_minutes: 240      # 4 hours between ANY autonomous phase
+  rumination_cooldown_minutes: 360  # 6 hours between rumination sessions
+  solo_work_cooldown_minutes: 360   # 6 hours between solo-work sessions
+  min_nodes_for_rumination: 5       # need enough knowledge to reflect on
+  solo_work_max_duration_minutes: 20  # wall clock limit for solo-work
+
+# Budget & cost controls
+budget:
+  max_cost_per_day: 2.00        # hard cap across all autonomous phases
+  max_cost_dream: 0.30          # per-session cap for processing dreams
+  max_cost_rumination: 0.30     # per-session cap for rumination
+  max_cost_solo_work: 1.00      # per-session cap for solo-work
+
+# API configuration
+api:
+  credentials_ref: "op://Key Vault/Anthropic API/credential"
+  oauth_credentials_ref: "op://Key Vault/Claude Code OAuth/credential"
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 8192
+
+# Graph parameters
+graph:
+  subgraph_depth: 3
+  max_context_nodes: 50
+
+# Decay settings
+decay:
+  passive_cooldown_per_cycle: 0.0005  # per scheduler check (~15min). ~0.048/day, ~20 days to fully cool
+  sltm_threshold: 0.05               # nodes below this decay demote to SLTM (super long-term)
+  pinned_floor: 0.5                  # pinned nodes won't decay below this
+  prune_threshold: 0.1               # future: archive nodes below this
+  stable_reinforcement_count: 5
+  reinforcement_floor: 0.20          # nodes reinforced >= stable_reinforcement_count times won't decay below this
+  dream_edge_warmth: 0.03            # warmth applied to nodes when dream creates an edge to them
+  connectivity_decay_reduction: true  # nodes with more edges decay slower
+  connectivity_tiers:                 # edge_count: decay_multiplier (lower = slower cooling)
+    5: 0.75                           # 5+ edges: 75% of normal decay
+    10: 0.50                          # 10+ edges: 50% of normal decay
+    20: 0.25                          # 20+ edges: 25% of normal decay
+
+# Logging
+logging:
+  level: INFO
+  dream_traces: true
