@@ -1,0 +1,110 @@
+# Somnia — Docker Compose
+#
+# Three services + PostgreSQL on a shared network.
+# Configure credentials in .env before starting.
+#
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose up -d quies    # Start just the memory service
+#   docker compose logs -f quies  # Follow logs
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: somnia-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: somnia
+      POSTGRES_USER: ${POSTGRES_USER:-somnia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - mcp-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-somnia}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  quies:
+    build:
+      context: quies
+      dockerfile: docker/Dockerfile
+    container_name: quies
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8010:8010"   # Flask API
+      - "8011:8011"   # MCP server (SSE)
+    volumes:
+      - ./quies:/app:ro
+      - quies-data:/data/somnia
+    environment:
+      SOMNIA_PORT: "8010"
+      SOMNIA_MCP_PORT: "8011"
+      SOMNIA_DEBUG: "false"
+      SOMNIA_DATABASE_URL: "postgresql://${POSTGRES_USER:-somnia}:${POSTGRES_PASSWORD}@somnia-postgres:5432/somnia"
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
+    networks:
+      - mcp-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8010/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  vigil:
+    build:
+      context: vigil
+      dockerfile: Dockerfile
+    container_name: vigil
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${SOMNIA_CONFIG_DIR:-./config}:/data/config:ro
+      - ${SOMNIA_DOMAINS_DIR:-./domains}:/data/domains
+      - ${SOMNIA_REPOS_DIR:-./}:/data/repos
+      - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs
+      - ${SOMNIA_DOCUMENTS_DIR:-./documents}:/data/documents
+    environment:
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
+      CREDENTIALS_API_KEY: ${CREDENTIALS_API_KEY:-}
+    networks:
+      - mcp-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  fabrica:
+    build:
+      context: fabrica
+      dockerfile: Dockerfile
+    container_name: fabrica
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SOMNIA_DATA_ROOT:-/volume1/docker/somnia}:/data
+    networks:
+      - mcp-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  pgdata:
+  quies-data:
+
+networks:
+  mcp-net:
+    external: true
