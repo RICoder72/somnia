@@ -15,6 +15,12 @@ if [ "$(id -u)" = "0" ]; then
     echo "  Fixing data directory permissions..."
     mkdir -p /data/somnia/backups /data/somnia/solo-work /data/somnia/logs /data/somnia/db
     chown -R somnia:somnia /data/somnia
+    # Belt-and-suspenders: explicit chmod on writable directories
+    # Synology bind mounts can ignore chown due to ACLs
+    chmod -R u+rwX /data/somnia
+    chmod 777 /data/somnia/backups /data/somnia/solo-work /data/somnia/logs
+    # Ensure continuity_note.md is writable if it exists
+    [ -f /data/somnia/continuity_note.md ] && chmod 666 /data/somnia/continuity_note.md
     chown -R somnia:somnia /home/somnia
 
     echo "  Dropping to somnia user..."
