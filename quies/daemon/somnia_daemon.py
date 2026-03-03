@@ -145,8 +145,14 @@ def read_continuity_note():
 def write_continuity_note(note):
     """Save a continuity note for the next rumination instance."""
     path = DATA_DIR / "continuity_note.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(note.strip())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(note.strip())
+    except PermissionError as e:
+        logger.warning(f"Could not write continuity note (permissions): {e}")
+        log_event('warning', 'rumination',
+                  f'Continuity note write failed: {e}',
+                  {'path': str(path)})
 
 
 def resolve_edge_ids(edge_ids_json):
@@ -693,12 +699,47 @@ def get_activity_summary():
 def extract_json_from_output(output):
     """Extract the operations JSON block from Claude's dream output."""
     if isinstance(output, dict):
-        text = output.get('result') or output.get('raw') or ''
-        # If result is empty but we have output tokens, try stringifying the whole dict
-        # This catches cases where the CLI captures content outside the result field
+        # Try multiple fields where Claude Code CLI might put the response
+        text = ''
+        for field in ('result', 'raw', 'content', 'text', 'response'):
+            val = output.get(field)
+            if val and isinstance(val, str) and val.strip():
+                text = val
+                break
+            elif val and isinstance(val, list):
+                # content might be a list of blocks
+                for block in val:
+                    if isinstance(block, dict) and block.get('text'):
+                        text = block['text']
+                        break
+                    elif isinstance(block, dict) and block.get('content'):
+                        text = str(block['content'])
+                        break
+                if text:
+                    break
+
+        # Check for messages array (multi-turn format)
+        if not text.strip() and 'messages' in output:
+            for msg in reversed(output.get('messages', [])):
+                if isinstance(msg, dict):
+                    msg_content = msg.get('content', '')
+                    if isinstance(msg_content, str) and msg_content.strip():
+                        text = msg_content
+                        break
+                    elif isinstance(msg_content, list):
+                        for block in msg_content:
+                            if isinstance(block, dict) and block.get('text'):
+                                text = block['text']
+                                break
+
         if not text.strip():
-            logger.warning("extract_json: 'result' field empty, falling back to full output scan")
+            logger.warning(
+                f"extract_json: all known fields empty. "
+                f"Keys present: {list(output.keys())}, "
+                f"output_tokens: {output.get('usage', {}).get('output_tokens', '?')}")
             text = str(output)
+    else:
+        text = str(output)
     else:
         text = str(output)
 
@@ -1151,6 +1192,18 @@ def run_consolidation(dry_run=False, mode='process'):
             output = {"raw": result.stdout}
 
         dream_ops = extract_json_from_output(output)
+
+        # Diagnostic dump when extraction fails
+        if not dream_ops:
+            diag_dir = DATA_DIR / "diagnostics"
+            diag_dir.mkdir(parents=True, exist_ok=True)
+            diag_path = diag_dir / f"raw-output-{dream_id[:8]}.json"
+            try:
+                with open(diag_path, 'w') as f:
+                    json.dump(output, f, indent=2, default=str)
+                logger.info(f"Wrote diagnostic dump: {diag_path}")
+            except Exception as e:
+                logger.warning(f"Could not write diagnostic dump: {e}")
 
         if mode == 'solo_work':
             # Solo-work produces findings, not graph operations
@@ -1720,12 +1773,15 @@ def dream_scheduler():
                     sys.path.insert(0, str(APP_DIR / "scripts"))
                     backup_mod = importlib.import_module("backup_graph")
                     _aio.run(backup_mod.dump_graph())
-                    _last_backup_date = today
                     logger.info("Scheduler: nightly backup complete")
                     log_event('info', 'backup', 'Nightly graph backup complete')
                 except Exception as e:
                     logger.error(f"Scheduler: backup failed: {e}")
                     log_event('error', 'backup', f'Nightly backup failed: {e}')
+                finally:
+                    # Always mark today as attempted, even on failure,
+                    # to avoid retrying every 15 minutes
+                    _last_backup_date = today
 
             # Phase 1: Processing — highest priority, runs if STM has items
             can, reason = can_dream()
