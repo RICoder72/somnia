@@ -740,8 +740,6 @@ def extract_json_from_output(output):
             text = str(output)
     else:
         text = str(output)
-    else:
-        text = str(output)
 
     json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
     if json_match:
