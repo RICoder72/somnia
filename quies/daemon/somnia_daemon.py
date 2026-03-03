@@ -2753,6 +2753,90 @@ def test_cli():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/debug/cli-test", methods=["POST"])
+def debug_cli_test():
+    """Temporary diagnostic: run a minimal CLI call and return raw output."""
+    auth_type, token = get_claude_auth()
+    if not token:
+        return jsonify({"error": "No auth"}), 500
+
+    test_prompt = """You are a test. Respond with ONLY this JSON block, nothing else:
+
+```json
+{
+  "summary": "test response",
+  "operations": []
+}
+```"""
+
+    env = {**os.environ}
+    if auth_type == 'oauth':
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    else:
+        env["ANTHROPIC_API_KEY"] = token
+
+    # Test 1: --print --output-format json (current production mode)
+    result1 = subprocess.run(
+        ["claude", "-p", test_prompt, "--print", "--output-format", "json",
+         "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
+         "--max-turns", "1"],
+        capture_output=True, text=True, timeout=120, env=env
+    )
+
+    try:
+        parsed1 = json.loads(result1.stdout)
+    except json.JSONDecodeError:
+        parsed1 = {"_raw_stdout": result1.stdout[:3000]}
+
+    # Test 2: --print only (no --output-format json) to see raw text
+    result2 = subprocess.run(
+        ["claude", "-p", test_prompt, "--print",
+         "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
+         "--max-turns", "1"],
+        capture_output=True, text=True, timeout=120, env=env
+    )
+
+    # Test 3: --output-format json only (no --print)
+    result3 = subprocess.run(
+        ["claude", "-p", test_prompt, "--output-format", "json",
+         "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
+         "--max-turns", "1"],
+        capture_output=True, text=True, timeout=120, env=env
+    )
+
+    try:
+        parsed3 = json.loads(result3.stdout)
+    except json.JSONDecodeError:
+        parsed3 = {"_raw_stdout": result3.stdout[:3000]}
+
+    # Check CLI version
+    ver = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10, env=env)
+
+    return jsonify({
+        "cli_version": ver.stdout.strip(),
+        "test1_print_json": {
+            "exit_code": result1.returncode,
+            "stdout_keys": list(parsed1.keys()) if isinstance(parsed1, dict) else "not_dict",
+            "result_field": repr(parsed1.get('result', '_missing_')[:500]) if isinstance(parsed1, dict) else None,
+            "output_tokens": parsed1.get('usage', {}).get('output_tokens') if isinstance(parsed1, dict) else None,
+            "stderr": result1.stderr[:500],
+            "full_parsed": parsed1
+        },
+        "test2_print_only": {
+            "exit_code": result2.returncode,
+            "stdout": result2.stdout[:3000],
+            "stderr": result2.stderr[:500]
+        },
+        "test3_json_only": {
+            "exit_code": result3.returncode,
+            "stdout_keys": list(parsed3.keys()) if isinstance(parsed3, dict) else "not_dict",
+            "result_field": repr(parsed3.get('result', '_missing_')[:500]) if isinstance(parsed3, dict) else None,
+            "output_tokens": parsed3.get('usage', {}).get('output_tokens') if isinstance(parsed3, dict) else None,
+            "full_parsed": parsed3
+        }
+    })
+
+
 @app.route("/search", methods=["GET"])
 def search_nodes():
     """Full-text search across both LTM and STM using PostgreSQL tsvector."""
