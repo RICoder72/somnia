@@ -2384,54 +2384,6 @@ def get_finding(filename):
     return jsonify({"filename": filename, "content": path.read_text()})
 
 
-@app.route("/test-cli", methods=["POST"])
-def test_cli_output():
-    """Diagnostic: run a minimal CLI call and return the raw output structure."""
-    data = request.get_json() or {}
-    test_prompt = data.get("prompt", 'Respond with exactly: {"summary":"test","operations":[]}')
-    flags = data.get("flags", ["--output-format", "json"])
-    
-    auth_type, token = get_claude_auth()
-    if not token:
-        return jsonify({"error": "No auth"}), 500
-    
-    env = {**os.environ}
-    if auth_type == 'oauth':
-        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-    else:
-        env["ANTHROPIC_API_KEY"] = token
-    
-    cmd = ["claude", "-p", test_prompt] + flags + [
-        "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
-        "--max-turns", "1"
-    ]
-    
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
-        
-        stdout_json = None
-        try:
-            stdout_json = json.loads(result.stdout)
-        except:
-            pass
-        
-        return jsonify({
-            "cmd": cmd,
-            "exit_code": result.returncode,
-            "stdout_length": len(result.stdout),
-            "stderr_length": len(result.stderr),
-            "stderr_preview": result.stderr[:500],
-            "stdout_is_json": stdout_json is not None,
-            "stdout_json_keys": list(stdout_json.keys()) if stdout_json else None,
-            "stdout_json": stdout_json,
-            "stdout_raw_preview": result.stdout[:2000] if not stdout_json else None,
-        })
-    except subprocess.TimeoutExpired:
-        return jsonify({"error": "timeout"}), 504
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/analytics", methods=["GET"])
 def analytics_report():
     """Generate an analytics report for the specified time window."""
@@ -2772,68 +2724,6 @@ def system_logs():
     })
 
 
-@app.route("/test-cli", methods=["POST"])
-def test_cli():
-    """Debug endpoint: run a minimal CLI call and return raw output."""
-    data = request.get_json() or {}
-    prompt = data.get("prompt", "Reply with exactly: {\"summary\": \"test\", \"operations\": []}")
-    max_turns = str(data.get("max_turns", 1))
-    skip_perms = data.get("skip_permissions", False)
-    
-    auth_type, token = get_claude_auth()
-    if not token:
-        return jsonify({"error": "No auth configured"}), 500
-    
-    env = {**os.environ}
-    if auth_type == 'oauth':
-        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-    else:
-        env["ANTHROPIC_API_KEY"] = token
-    
-    try:
-        # NOTE: Do NOT add --print flag. When extended thinking is active,
-        # --print only captures visible text (empty if all tokens go to thinking).
-        # --output-format json alone captures the full result field correctly.
-        cmd = ["claude", "-p", prompt, "--output-format", "json",
-             "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
-             "--max-turns", max_turns]
-        if skip_perms:
-            cmd.insert(4, "--dangerously-skip-permissions")
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True, text=True, timeout=120, env=env
-        )
-        
-        raw_stdout = result.stdout
-        raw_stderr = result.stderr
-        
-        try:
-            parsed = json.loads(raw_stdout)
-        except json.JSONDecodeError:
-            parsed = None
-        
-        return jsonify({
-            "exit_code": result.returncode,
-            "stdout_length": len(raw_stdout),
-            "stderr_length": len(raw_stderr),
-            "stderr_preview": raw_stderr[:500],
-            "parsed_keys": list(parsed.keys()) if parsed else None,
-            "parsed_result_field": repr(parsed.get('result', 'MISSING'))[:500] if parsed else None,
-            "parsed_type": parsed.get('type') if parsed else None,
-            "parsed_subtype": parsed.get('subtype') if parsed else None,
-            "parsed_stop_reason": parsed.get('stop_reason') if parsed else None,
-            "parsed_usage": parsed.get('usage') if parsed else None,
-            "raw_stdout_first_2000": raw_stdout[:2000],
-            "raw_stdout_last_1000": raw_stdout[-1000:] if len(raw_stdout) > 1000 else raw_stdout,
-            "full_parsed": parsed
-        })
-    except subprocess.TimeoutExpired:
-        return jsonify({"error": "Timed out"}), 504
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/debug/cli-test", methods=["POST"])
 def debug_cli_test():
     """Temporary diagnostic: run CLI tests and return raw output."""
@@ -2924,55 +2814,6 @@ def debug_cli_test():
     results['test_mode'] = test_mode
 
     return jsonify(results)
-
-
-@app.route("/test-cli", methods=["POST"])
-def test_cli():
-    """Diagnostic endpoint: run a minimal CLI call and return raw output structure."""
-    data = request.get_json() or {}
-    prompt = data.get("prompt", 'Respond with exactly: {"summary":"test","operations":[]}')
-    flags = data.get("flags", [])
-
-    auth_type, token = get_claude_auth()
-    if not token:
-        return jsonify({"error": "No auth"}), 500
-
-    env = {**os.environ}
-    if auth_type == 'oauth':
-        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-    else:
-        env["ANTHROPIC_API_KEY"] = token
-
-    cmd = ["claude", "-p", prompt, "--print", "--output-format", "json",
-           "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
-           "--max-turns", "1"]
-    cmd.extend(flags)
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
-        try:
-            parsed = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            parsed = None
-
-        return jsonify({
-            "exit_code": result.returncode,
-            "stdout_len": len(result.stdout),
-            "stderr_len": len(result.stderr),
-            "stderr_preview": result.stderr[:500],
-            "parsed_keys": list(parsed.keys()) if parsed else None,
-            "result_field": repr(parsed.get('result', 'NOT_PRESENT'))[:500] if parsed else None,
-            "result_len": len(parsed.get('result', '')) if parsed else None,
-            "output_tokens": parsed.get('usage', {}).get('output_tokens') if parsed else None,
-            "stop_reason": parsed.get('stop_reason') if parsed else None,
-            "subtype": parsed.get('subtype') if parsed else None,
-            "raw_stdout_preview": result.stdout[:2000],
-            "all_string_fields": {k: repr(v)[:200] for k, v in (parsed or {}).items() if isinstance(v, str)} if parsed else None
-        })
-    except subprocess.TimeoutExpired:
-        return jsonify({"error": "Timeout"}), 504
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/search", methods=["GET"])
