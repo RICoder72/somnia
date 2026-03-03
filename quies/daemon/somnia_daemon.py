@@ -1146,10 +1146,12 @@ def run_consolidation(dry_run=False, mode='process'):
         max_turns = "20" if mode == 'solo_work' else "10"
         timeout_seconds = 1200 if mode == 'solo_work' else 600
         cmd = ["claude", "-p", full_prompt, "--print", "--output-format", "json",
-             "--dangerously-skip-permissions",
              "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
              "--max-turns", max_turns]
         # Enable web research for solo-work sessions
+        # Note: --allowedTools with -p (non-interactive) auto-approves listed tools.
+        # Do NOT use --dangerously-skip-permissions — it causes the result field
+        # to be empty in --output-format json mode (confirmed via test-cli debugging).
         if mode == 'solo_work':
             cmd.extend(["--allowedTools", "WebSearch", "WebFetch",
                          "Read", "Grep", "Glob", "Bash", "Edit"])
@@ -2697,6 +2699,8 @@ def test_cli():
     """Debug endpoint: run a minimal CLI call and return raw output."""
     data = request.get_json() or {}
     prompt = data.get("prompt", "Reply with exactly: {\"summary\": \"test\", \"operations\": []}")
+    max_turns = str(data.get("max_turns", 1))
+    skip_perms = data.get("skip_permissions", False)
     
     auth_type, token = get_claude_auth()
     if not token:
@@ -2709,10 +2713,14 @@ def test_cli():
         env["ANTHROPIC_API_KEY"] = token
     
     try:
-        result = subprocess.run(
-            ["claude", "-p", prompt, "--print", "--output-format", "json",
+        cmd = ["claude", "-p", prompt, "--print", "--output-format", "json",
              "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
-             "--max-turns", "1"],
+             "--max-turns", max_turns]
+        if skip_perms:
+            cmd.insert(4, "--dangerously-skip-permissions")
+        
+        result = subprocess.run(
+            cmd,
             capture_output=True, text=True, timeout=120, env=env
         )
         
