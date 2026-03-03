@@ -2389,7 +2389,7 @@ def test_cli_output():
     """Diagnostic: run a minimal CLI call and return the raw output structure."""
     data = request.get_json() or {}
     test_prompt = data.get("prompt", 'Respond with exactly: {"summary":"test","operations":[]}')
-    flags = data.get("flags", ["--print", "--output-format", "json"])
+    flags = data.get("flags", ["--output-format", "json"])
     
     auth_type, token = get_claude_auth()
     if not token:
@@ -2791,7 +2791,10 @@ def test_cli():
         env["ANTHROPIC_API_KEY"] = token
     
     try:
-        cmd = ["claude", "-p", prompt, "--print", "--output-format", "json",
+        # NOTE: Do NOT add --print flag. When extended thinking is active,
+        # --print only captures visible text (empty if all tokens go to thinking).
+        # --output-format json alone captures the full result field correctly.
+        cmd = ["claude", "-p", prompt, "--output-format", "json",
              "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
              "--max-turns", max_turns]
         if skip_perms:
