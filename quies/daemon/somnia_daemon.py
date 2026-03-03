@@ -1191,6 +1191,36 @@ def run_consolidation(dry_run=False, mode='process'):
         except json.JSONDecodeError:
             output = {"raw": result.stdout}
 
+        # Retry once if result is empty but tokens were consumed (intermittent CLI issue)
+        result_text = output.get('result', '') if isinstance(output, dict) else ''
+        output_tokens = (output.get('usage', {}).get('output_tokens', 0)
+                         if isinstance(output, dict) else 0)
+        if not result_text.strip() and output_tokens > 100:
+            logger.warning(
+                f"[{mode}] Empty result with {output_tokens} output tokens — retrying once")
+            log_event('warning', mode.replace('process', 'dream'),
+                      f'Empty result with {output_tokens} tokens, retrying',
+                      {'output_tokens': output_tokens, 'attempt': 1},
+                      dream_id=dream_id)
+            try:
+                retry_result = subprocess.run(
+                    cmd, capture_output=True, text=True,
+                    timeout=timeout_seconds, env=env)
+                if retry_result.returncode == 0:
+                    try:
+                        retry_output = json.loads(retry_result.stdout)
+                    except json.JSONDecodeError:
+                        retry_output = {"raw": retry_result.stdout}
+                    retry_text = retry_output.get('result', '') if isinstance(retry_output, dict) else ''
+                    if retry_text.strip():
+                        logger.info(f"[{mode}] Retry succeeded — {len(retry_text)} chars")
+                        output = retry_output
+                        ended_at = datetime.now().isoformat()
+                        duration_seconds = (datetime.fromisoformat(ended_at) -
+                                            datetime.fromisoformat(started_at)).seconds
+            except Exception as retry_err:
+                logger.warning(f"[{mode}] Retry failed: {retry_err}")
+
         dream_ops = extract_json_from_output(output)
 
         # Diagnostic dump when extraction fails
