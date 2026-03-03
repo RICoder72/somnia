@@ -1089,7 +1089,7 @@ what you investigated, produce a minimal honest entry. Output exactly ONE JSON b
 
     try:
         result = subprocess.run(
-            ["claude", "-p", recovery_prompt, "--print", "--output-format", "json",
+            ["claude", "-p", recovery_prompt, "--output-format", "json",
              "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
              "--max-turns", "1"],
             capture_output=True, text=True, timeout=120, env=env
@@ -1145,13 +1145,13 @@ def run_consolidation(dry_run=False, mode='process'):
     try:
         max_turns = "20" if mode == 'solo_work' else "10"
         timeout_seconds = 1200 if mode == 'solo_work' else 600
-        cmd = ["claude", "-p", full_prompt, "--print", "--output-format", "json",
+        cmd = ["claude", "-p", full_prompt, "--output-format", "json",
              "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
              "--max-turns", max_turns]
         # Enable web research for solo-work sessions
         # Note: --allowedTools with -p (non-interactive) auto-approves listed tools.
-        # Do NOT use --dangerously-skip-permissions — it causes the result field
-        # to be empty in --output-format json mode (confirmed via test-cli debugging).
+        # Do NOT use --print with --output-format json — it causes the result field
+        # to be empty when extended thinking is active (confirmed via cli-test debugging).
         if mode == 'solo_work':
             cmd.extend(["--allowedTools", "WebSearch", "WebFetch",
                          "Read", "Grep", "Glob", "Bash", "Edit"])
@@ -2352,6 +2352,54 @@ def get_finding(filename):
     if not path.exists() or not path.name.startswith("solo-work-"):
         return jsonify({"error": "Finding not found"}), 404
     return jsonify({"filename": filename, "content": path.read_text()})
+
+
+@app.route("/test-cli", methods=["POST"])
+def test_cli_output():
+    """Diagnostic: run a minimal CLI call and return the raw output structure."""
+    data = request.get_json() or {}
+    test_prompt = data.get("prompt", 'Respond with exactly: {"summary":"test","operations":[]}')
+    flags = data.get("flags", ["--print", "--output-format", "json"])
+    
+    auth_type, token = get_claude_auth()
+    if not token:
+        return jsonify({"error": "No auth"}), 500
+    
+    env = {**os.environ}
+    if auth_type == 'oauth':
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    else:
+        env["ANTHROPIC_API_KEY"] = token
+    
+    cmd = ["claude", "-p", test_prompt] + flags + [
+        "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
+        "--max-turns", "1"
+    ]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+        
+        stdout_json = None
+        try:
+            stdout_json = json.loads(result.stdout)
+        except:
+            pass
+        
+        return jsonify({
+            "cmd": cmd,
+            "exit_code": result.returncode,
+            "stdout_length": len(result.stdout),
+            "stderr_length": len(result.stderr),
+            "stderr_preview": result.stderr[:500],
+            "stdout_is_json": stdout_json is not None,
+            "stdout_json_keys": list(stdout_json.keys()) if stdout_json else None,
+            "stdout_json": stdout_json,
+            "stdout_raw_preview": result.stdout[:2000] if not stdout_json else None,
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "timeout"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/analytics", methods=["GET"])
