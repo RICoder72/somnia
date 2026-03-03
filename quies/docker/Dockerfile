@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
     sudo \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js (for Claude Code CLI)
@@ -58,8 +59,8 @@ ENV SOMNIA_MCP_PORT=8011
 # Example: postgresql://user:pass@host:5432/somnia
 ENV HOME=/home/somnia
 
-# Switch to non-root user
-USER somnia
+# NOTE: Container starts as root. The entrypoint fixes volume permissions
+# then drops to the somnia user via gosu before starting services.
 
 # Expose ports (API + MCP)
 EXPOSE 8010 8011

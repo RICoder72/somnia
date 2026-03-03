@@ -1,5 +1,5 @@
 #!/bin/bash
-# Somnia entrypoint - runs both Flask API and MCP server
+# Somnia entrypoint - fix volume permissions, then run services as somnia user
 
 set -e
 
@@ -9,8 +9,19 @@ echo "  DATA_DIR: ${SOMNIA_DATA_DIR:-/data/somnia}"
 echo "  API port: ${SOMNIA_PORT:-8010}"
 echo "  MCP port: ${SOMNIA_MCP_PORT:-8011}"
 
-# Ensure data subdirectories exist (volume mount may not have them)
-mkdir -p /data/somnia/backups /data/somnia/solo-work /data/somnia/logs 2>/dev/null || true
+# Fix volume permissions (runs as root before dropping privileges)
+# Named Docker volumes may be owned by root from previous builds
+if [ "$(id -u)" = "0" ]; then
+    echo "  Fixing data directory permissions..."
+    mkdir -p /data/somnia/backups /data/somnia/solo-work /data/somnia/logs /data/somnia/db
+    chown -R somnia:somnia /data/somnia
+    chown -R somnia:somnia /home/somnia
+
+    echo "  Dropping to somnia user..."
+    exec gosu somnia "$0" "$@"
+fi
+
+# Everything below runs as somnia user
 
 # Start the Flask API in the background
 python daemon/somnia_daemon.py &
