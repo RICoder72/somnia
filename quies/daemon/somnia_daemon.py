@@ -2928,6 +2928,59 @@ def debug_cli_test():
 
 @app.route("/search", methods=["GET"])
 def search_nodes():
+
+
+@app.route("/test-cli", methods=["POST"])
+def test_cli():
+    """Diagnostic endpoint: run a minimal CLI call and return raw output structure."""
+    data = request.get_json() or {}
+    prompt = data.get("prompt", 'Respond with exactly: {"summary":"test","operations":[]}')
+    flags = data.get("flags", [])
+
+    auth_type, token = get_claude_auth()
+    if not token:
+        return jsonify({"error": "No auth"}), 500
+
+    env = {**os.environ}
+    if auth_type == 'oauth':
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    else:
+        env["ANTHROPIC_API_KEY"] = token
+
+    cmd = ["claude", "-p", prompt, "--print", "--output-format", "json",
+           "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
+           "--max-turns", "1"]
+    cmd.extend(flags)
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+        try:
+            parsed = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            parsed = None
+
+        return jsonify({
+            "exit_code": result.returncode,
+            "stdout_len": len(result.stdout),
+            "stderr_len": len(result.stderr),
+            "stderr_preview": result.stderr[:500],
+            "parsed_keys": list(parsed.keys()) if parsed else None,
+            "result_field": repr(parsed.get('result', 'NOT_PRESENT'))[:500] if parsed else None,
+            "result_len": len(parsed.get('result', '')) if parsed else None,
+            "output_tokens": parsed.get('usage', {}).get('output_tokens') if parsed else None,
+            "stop_reason": parsed.get('stop_reason') if parsed else None,
+            "subtype": parsed.get('subtype') if parsed else None,
+            "raw_stdout_preview": result.stdout[:2000],
+            "all_string_fields": {k: repr(v)[:200] for k, v in (parsed or {}).items() if isinstance(v, str)} if parsed else None
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timeout"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/search", methods=["GET"])
+def search_nodes():
     """Full-text search across both LTM and STM using PostgreSQL tsvector."""
     query = request.args.get("q")
     if not query:
