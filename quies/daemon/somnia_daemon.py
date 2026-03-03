@@ -2926,10 +2926,6 @@ def debug_cli_test():
     return jsonify(results)
 
 
-@app.route("/search", methods=["GET"])
-def search_nodes():
-
-
 @app.route("/test-cli", methods=["POST"])
 def test_cli():
     """Diagnostic endpoint: run a minimal CLI call and return raw output structure."""
