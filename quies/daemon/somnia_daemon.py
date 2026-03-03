@@ -2692,6 +2692,59 @@ def system_logs():
     })
 
 
+@app.route("/test-cli", methods=["POST"])
+def test_cli():
+    """Debug endpoint: run a minimal CLI call and return raw output."""
+    data = request.get_json() or {}
+    prompt = data.get("prompt", "Reply with exactly: {\"summary\": \"test\", \"operations\": []}")
+    
+    auth_type, token = get_claude_auth()
+    if not token:
+        return jsonify({"error": "No auth configured"}), 500
+    
+    env = {**os.environ}
+    if auth_type == 'oauth':
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    else:
+        env["ANTHROPIC_API_KEY"] = token
+    
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--print", "--output-format", "json",
+             "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
+             "--max-turns", "1"],
+            capture_output=True, text=True, timeout=120, env=env
+        )
+        
+        raw_stdout = result.stdout
+        raw_stderr = result.stderr
+        
+        try:
+            parsed = json.loads(raw_stdout)
+        except json.JSONDecodeError:
+            parsed = None
+        
+        return jsonify({
+            "exit_code": result.returncode,
+            "stdout_length": len(raw_stdout),
+            "stderr_length": len(raw_stderr),
+            "stderr_preview": raw_stderr[:500],
+            "parsed_keys": list(parsed.keys()) if parsed else None,
+            "parsed_result_field": repr(parsed.get('result', 'MISSING'))[:500] if parsed else None,
+            "parsed_type": parsed.get('type') if parsed else None,
+            "parsed_subtype": parsed.get('subtype') if parsed else None,
+            "parsed_stop_reason": parsed.get('stop_reason') if parsed else None,
+            "parsed_usage": parsed.get('usage') if parsed else None,
+            "raw_stdout_first_2000": raw_stdout[:2000],
+            "raw_stdout_last_1000": raw_stdout[-1000:] if len(raw_stdout) > 1000 else raw_stdout,
+            "full_parsed": parsed
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timed out"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/search", methods=["GET"])
 def search_nodes():
     """Full-text search across both LTM and STM using PostgreSQL tsvector."""
