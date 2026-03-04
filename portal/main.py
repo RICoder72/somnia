@@ -431,7 +431,7 @@ async def file_browser_page(domain: str):
 @app.get("/portal/api/files/{domain}")
 async def api_list_files(domain: str, path: str = Query("")):
     info = get_domain_info(domain)
-    docs = DOMAINS_ROOT / domain / "documents"
+    docs = DOMAINS_ROOT / domain / "files"
     target = safe_resolve(docs, path)
     if not target.exists():
         raise HTTPException(404, "Path not found")
@@ -454,7 +454,7 @@ async def api_list_files(domain: str, path: str = Query("")):
 @app.get("/portal/api/download/{domain}")
 async def api_download(domain: str, path: str = Query(...)):
     info = get_domain_info(domain)
-    docs = DOMAINS_ROOT / domain / "documents"
+    docs = DOMAINS_ROOT / domain / "files"
     target = safe_resolve(docs, path)
     if not target.is_file():
         raise HTTPException(404, "File not found")
@@ -468,7 +468,7 @@ async def api_upload(domain: str, file: UploadFile = File(...), path: str = Quer
     ext = Path(file.filename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, f"File type '{ext}' is not permitted")
-    docs = DOMAINS_ROOT / domain / "documents"
+    docs = DOMAINS_ROOT / domain / "files"
     dest_dir = safe_resolve(docs, path)
     if not dest_dir.is_dir():
         raise HTTPException(400, "Target path is not a directory")
