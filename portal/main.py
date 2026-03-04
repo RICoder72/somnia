@@ -599,6 +599,12 @@ async def data_page(domain: str):
         for q in queries
     )
 
+    # Build this outside the f-string to avoid {{}} escaping issues
+    queries_js = json.dumps([
+        {"id": q["id"], "label": q["label"], "description": q["description"]}
+        for q in queries
+    ])
+
     body = f"""
     <div class="breadcrumb">
       <a href="/portal">Portal</a>
@@ -638,7 +644,7 @@ async def data_page(domain: str):
       let currentData = null;
       let currentColumns = null;
 
-      const queries = {json.dumps([{{"id": q["id"], "label": q["label"], "description": q["description"]}} for q in queries])};
+      const queries = {queries_js};
 
       document.getElementById('query-select').addEventListener('change', function() {{
         const q = queries.find(x => x.id === this.value);
