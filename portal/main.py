@@ -199,7 +199,7 @@ def html_shell(title: str, body: str, extra_head: str = "") -> str:
     <div class="topbar-logo">✦ constellation <span>/ portal</span></div>
     <nav class="topbar-nav">
       <a href="/portal">Home</a>
-      <a href="/somnia/dashboard" target="_blank">Somnia Dashboard ↗</a>
+      <a href="/dashboard" target="_blank">Somnia Dashboard ↗</a>
     </nav>
   </div>
   <div class="container">
@@ -242,7 +242,7 @@ async def landing():
     <div style="margin-bottom: 40px;">
       <h2>Quick Links</h2>
       <div class="card-grid">
-        <a href="/somnia/dashboard" target="_blank" style="text-decoration:none;">
+        <a href="/dashboard" target="_blank" style="text-decoration:none;">
           <div class="card">
             <div class="card-icon">🧠</div>
             <div class="card-title">Somnia Dashboard</div>
