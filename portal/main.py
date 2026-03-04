@@ -11,6 +11,9 @@ Routes:
   GET  /portal/reports/{domain}         Reports gallery (HTML)
   GET  /portal/reports/{domain}/view    Serve a report, ?file=
   GET  /portal/api/reports/{domain}     List reports (JSON)
+  GET  /portal/data/{domain}            Data query UI (HTML)
+  GET  /portal/api/data/{domain}        Run a saved query, ?query_id=
+  GET  /portal/api/data/{domain}/list   List available queries (JSON)
 """
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
@@ -19,12 +22,16 @@ from pathlib import Path
 from datetime import datetime
 import json
 import mimetypes
+import os
+import asyncpg
 
 app = FastAPI(title="Constellation Portal")
 
 DOMAINS_ROOT = Path("/data/domains")
 CONFIG_FILE = Path("/data/config/portal.json")
+QUERIES_FILE = Path("/data/config/portal-queries.json")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+DB_URL = os.environ.get("PORTAL_DB_URL", "postgresql://portal_reader:PortalRead2026!@constellation-postgres:5432/constellation")
 
 ALLOWED_EXTENSIONS = {
     ".pdf", ".md", ".txt", ".docx", ".xlsx", ".xls",
@@ -43,6 +50,14 @@ def load_config() -> dict:
             return json.load(f)
     except Exception:
         return {"exposed_domains": []}
+
+
+def load_queries() -> list:
+    try:
+        with open(QUERIES_FILE) as f:
+            return json.load(f).get("queries", [])
+    except Exception:
+        return []
 
 
 def get_domain_info(domain: str) -> dict:
@@ -228,8 +243,9 @@ async def landing():
           <div class="card-title">{d.get('label', d['id'])}</div>
           <div class="card-desc">{d.get('description', '')}</div>
           <div class="card-links">
-            <a href="/portal/files/{d['id']}" class="btn btn-secondary">📄 Documents</a>
+            <a href="/portal/files/{d['id']}" class="btn btn-secondary">📄 Files</a>
             <a href="/portal/reports/{d['id']}" class="btn btn-secondary">📊 Reports</a>
+            <a href="/portal/data/{d['id']}" class="btn btn-secondary">🗄 Data</a>
           </div>
         </div>"""
 
@@ -567,6 +583,213 @@ async def api_list_reports(domain: str):
                 "size": s.st_size,
             })
     return {"reports": reports, "domain": domain}
+
+
+# ---------------------------------------------------------------------------
+# Data — saved queries
+# ---------------------------------------------------------------------------
+
+@app.get("/portal/data/{domain}", response_class=HTMLResponse)
+async def data_page(domain: str):
+    info = get_domain_info(domain)
+    queries = [q for q in load_queries() if q.get("domain") == domain]
+
+    query_options = "".join(
+        f'<option value="{q["id"]}">{q["label"]} — {q["description"]}</option>'
+        for q in queries
+    )
+
+    body = f"""
+    <div class="breadcrumb">
+      <a href="/portal">Portal</a>
+      <span class="sep">/</span>
+      <span>{info.get('label', domain)}</span>
+      <span class="sep">/</span>
+      <span>Data</span>
+    </div>
+    <div class="section-header">
+      <h1>{info.get('icon','📁')} {info.get('label', domain)} — Data</h1>
+    </div>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:24px;">
+      Saved queries against the Burrillville project store. Read-only. Ask Claude to add new queries.
+    </p>
+
+    <div style="display:flex;gap:12px;align-items:flex-end;margin-bottom:20px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:280px;">
+        <label style="display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Query</label>
+        <select id="query-select" style="width:100%;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;cursor:pointer;">
+          <option value="">— select a query —</option>
+          {query_options}
+        </select>
+      </div>
+      <button id="run-btn" class="btn btn-primary" style="padding:8px 20px;font-size:13px;" onclick="runQuery()">▶ Run</button>
+      <button id="csv-btn" class="btn btn-secondary" style="padding:8px 16px;font-size:13px;display:none;" onclick="exportCSV()">↓ CSV</button>
+    </div>
+
+    <div id="query-desc" style="font-size:12px;color:var(--muted);margin-bottom:16px;min-height:18px;"></div>
+    <div id="result-meta" style="font-size:12px;color:var(--muted);margin-bottom:8px;font-family:var(--mono);"></div>
+
+    <div id="result-area" style="overflow-x:auto;">
+      <p style="color:var(--muted);text-align:center;padding:40px 0;">Select a query and click Run.</p>
+    </div>
+
+    <script>
+      const DOMAIN = '{domain}';
+      let currentData = null;
+      let currentColumns = null;
+
+      const queries = {json.dumps([{{"id": q["id"], "label": q["label"], "description": q["description"]}} for q in queries])};
+
+      document.getElementById('query-select').addEventListener('change', function() {{
+        const q = queries.find(x => x.id === this.value);
+        document.getElementById('query-desc').textContent = q ? q.description : '';
+        document.getElementById('csv-btn').style.display = 'none';
+        currentData = null;
+      }});
+
+      async function runQuery() {{
+        const id = document.getElementById('query-select').value;
+        if (!id) {{ alert('Select a query first'); return; }}
+        const btn = document.getElementById('run-btn');
+        btn.textContent = '⏳ Running…';
+        btn.disabled = true;
+        document.getElementById('result-area').innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px 0;">Running query…</p>';
+        document.getElementById('result-meta').textContent = '';
+        document.getElementById('csv-btn').style.display = 'none';
+
+        try {{
+          const res = await fetch(`/portal/api/data/${{DOMAIN}}?query_id=${{encodeURIComponent(id)}}`);
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Query failed');
+
+          currentData = data.rows;
+          currentColumns = data.columns;
+
+          const elapsed = data.elapsed_ms ? ` · ${{data.elapsed_ms}}ms` : '';
+          document.getElementById('result-meta').textContent =
+            `${{data.rows.length}} row${{data.rows.length !== 1 ? 's' : ''}}${{elapsed}}`;
+
+          if (!data.rows.length) {{
+            document.getElementById('result-area').innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px 0;">No results.</p>';
+          }} else {{
+            document.getElementById('result-area').innerHTML = buildTable(data.columns, data.rows);
+            document.getElementById('csv-btn').style.display = 'inline-flex';
+          }}
+        }} catch(e) {{
+          document.getElementById('result-area').innerHTML =
+            `<div class="alert alert-error">Error: ${{e.message}}</div>`;
+        }} finally {{
+          btn.textContent = '▶ Run';
+          btn.disabled = false;
+        }}
+      }}
+
+      function buildTable(cols, rows) {{
+        const header = cols.map(c =>
+          `<th style="cursor:pointer;user-select:none;" onclick="sortTable(this, '${{c}}')">${{c}} <span style="color:var(--border)">⇅</span></th>`
+        ).join('');
+        const body = rows.map(row =>
+          '<tr>' + cols.map(c => {{
+            const val = row[c];
+            if (val === null || val === undefined || val === '') return '<td style="color:var(--border)">—</td>';
+            // Pretty-print JSON arrays
+            if (typeof val === 'string' && val.startsWith('[')) {{
+              try {{
+                const arr = JSON.parse(val);
+                return `<td>${{arr.map(x => `<span class="badge badge-blue" style="margin-right:3px">${{x}}</span>`).join('')}}</td>`;
+              }} catch(e) {{}}
+            }}
+            return `<td>${{String(val)}}</td>`;
+          }}).join('') + '</tr>'
+        ).join('');
+        return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;">
+          <table class="file-table" style="min-width:100%">
+            <thead><tr>${{header}}</tr></thead>
+            <tbody>${{body}}</tbody>
+          </table></div>`;
+      }}
+
+      let sortDir = {{}};
+      function sortTable(th, col) {{
+        if (!currentData) return;
+        sortDir[col] = sortDir[col] === 'asc' ? 'desc' : 'asc';
+        const sorted = [...currentData].sort((a, b) => {{
+          const va = a[col] ?? '';
+          const vb = b[col] ?? '';
+          return sortDir[col] === 'asc' ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+        }});
+        document.getElementById('result-area').innerHTML = buildTable(currentColumns, sorted);
+      }}
+
+      function exportCSV() {{
+        if (!currentData || !currentColumns) return;
+        const rows = [currentColumns.join(',')].concat(
+          currentData.map(row => currentColumns.map(c => {{
+            const v = row[c] ?? '';
+            return `"${{String(v).replace(/"/g,'""')}}"`;
+          }}).join(','))
+        );
+        const blob = new Blob([rows.join('\\n')], {{type: 'text/csv'}});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${{DOMAIN}}-${{document.getElementById('query-select').value}}-${{new Date().toISOString().slice(0,10)}}.csv`;
+        a.click();
+      }}
+
+      // Auto-run if query param in URL
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('q')) {{
+        document.getElementById('query-select').value = params.get('q');
+        document.getElementById('query-select').dispatchEvent(new Event('change'));
+        runQuery();
+      }}
+    </script>"""
+
+    return html_shell(f"{info.get('label', domain)} — Data", body)
+
+
+@app.get("/portal/api/data/{domain}/list")
+async def api_list_queries(domain: str):
+    get_domain_info(domain)
+    queries = [q for q in load_queries() if q.get("domain") == domain]
+    return {"queries": [{"id": q["id"], "label": q["label"], "description": q["description"]} for q in queries]}
+
+
+@app.get("/portal/api/data/{domain}")
+async def api_run_query(domain: str, query_id: str = Query(...)):
+    get_domain_info(domain)
+    queries = load_queries()
+    query = next((q for q in queries if q["id"] == query_id and q.get("domain") == domain), None)
+    if not query:
+        raise HTTPException(404, f"Query '{query_id}' not found for domain '{domain}'")
+
+    # Safety: only SELECT statements, no domain escape
+    sql = query["sql"].strip()
+    if not sql.upper().startswith("SELECT"):
+        raise HTTPException(400, "Only SELECT queries are permitted")
+
+    try:
+        import time
+        t0 = time.monotonic()
+        conn = await asyncpg.connect(DB_URL)
+        try:
+            rows = await conn.fetch(sql)
+        finally:
+            await conn.close()
+        elapsed = round((time.monotonic() - t0) * 1000)
+
+        if not rows:
+            return {"columns": [], "rows": [], "elapsed_ms": elapsed}
+
+        columns = list(rows[0].keys())
+        result = []
+        for row in rows:
+            result.append({col: row[col].isoformat() if hasattr(row[col], 'isoformat') else row[col] for col in columns})
+
+        return {"columns": columns, "rows": result, "elapsed_ms": elapsed, "query": query["label"]}
+
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 # ---------------------------------------------------------------------------
