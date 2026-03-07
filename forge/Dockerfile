@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Python dependencies ────────────────────────────────────────────────────
 RUN pip install --no-cache-dir uv
 
-COPY pyproject.toml /app/
+COPY . /app/
 RUN uv pip install --system -e .
 
 # ── Workspace directories ──────────────────────────────────────────────────
