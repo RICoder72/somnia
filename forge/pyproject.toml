@@ -14,16 +14,14 @@ dependencies = [
     "pillow>=10.0",
     # Matplotlib + mapping
     "matplotlib>=3.8",
-    "contextily>=1.6",
-    # GIS / geospatial
+    "contextily>=1.4",
+    # GIS / geospatial (system GDAL/GEOS/PROJ installed via apt)
     "shapely>=2.0",
     "pyproj>=3.6",
-    "fiona>=1.9",
     "geopandas>=0.14",
     "rasterio>=1.3",
-    # OSM routing and street networks
+    # OSM street networks (osmium-tool CLI available via apt)
     "osmnx>=1.9",
-    "python-osmium>=3.7",
     # Document generation
     "reportlab>=4.0",
     "openpyxl>=3.1",
