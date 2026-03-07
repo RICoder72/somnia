@@ -412,6 +412,62 @@ def git_push(repo: str) -> str:
     return out if ok else f"❌ {out}"
 
 
+
+# =============================================================================
+# Forge — workbench lifecycle
+# =============================================================================
+
+@mcp.tool()
+def forge_start() -> str:
+    """
+    Start the Forge workbench container.
+
+    Forge provides a full Python/GIS/Node.js environment with persistent
+    /workspace and shared /outputs. Use when you need to run map rendering,
+    GIS processing, data analysis, or any heavy workbench task.
+    """
+    ok, out = _run(
+        "docker run -d "
+        "--name forge "
+        "--network mcp-net "
+        "-p 8003:8003 "
+        "-v /volume1/docker/super-claude/forge/workspace:/workspace "
+        "-v /volume1/docker/super-claude/outputs:/outputs "
+        "-v /volume1/docker/super-claude/repos:/repos "
+        "--restart unless-stopped "
+        "forge"
+    )
+    if ok:
+        return "✅ Forge started — connect via https://zanni.synology.me/forge"
+    # May already be running
+    if "already in use" in out:
+        return "ℹ️  Forge is already running"
+    return f"❌ Failed to start Forge:\n{out}"
+
+
+@mcp.tool()
+def forge_stop() -> str:
+    """
+    Stop the Forge workbench container.
+
+    /workspace data persists on disk. Safe to stop when not in use.
+    """
+    _run("docker stop forge")
+    ok, out = _run("docker rm forge")
+    if ok or "No such container" in out:
+        return "✅ Forge stopped and removed"
+    return f"⚠️  {out}"
+
+
+@mcp.tool()
+def forge_status() -> str:
+    """Check whether Forge is running and healthy."""
+    ok, out = _run("docker inspect --format '{{.State.Status}} | {{.State.Health.Status}}' forge 2>/dev/null")
+    if not ok or not out.strip():
+        return "🔴 Forge is not running"
+    return f"🔨 Forge: {out.strip()}"
+
+
 # =============================================================================
 # Main
 # =============================================================================

@@ -2888,6 +2888,346 @@ def search_nodes():
 
 
 # ============================================================================
+# DASHBOARD
+# ============================================================================
+
+@app.route("/dashboard")
+def dashboard():
+    """Live Somnia dashboard — graph health, memory, dreams, budget."""
+    import psycopg2.extras
+    from datetime import timezone
+
+    now = datetime.now(timezone.utc)
+    since_7d = (now - timedelta(days=7)).isoformat()
+
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # ── Graph snapshot ──
+            cur.execute("SELECT COUNT(*) as c FROM nodes WHERE memory_layer='ltm'")
+            ltm = cur.fetchone()['c']
+            cur.execute("SELECT COUNT(*) as c FROM nodes WHERE memory_layer='sltm'")
+            sltm = cur.fetchone()['c']
+            cur.execute("SELECT COUNT(*) as c FROM nodes WHERE pinned=TRUE")
+            pinned_count = cur.fetchone()['c']
+            cur.execute("SELECT COUNT(*) as c FROM edges")
+            edges = cur.fetchone()['c']
+            cur.execute("SELECT COUNT(*) as c FROM stm_nodes")
+            inbox = cur.fetchone()['c']
+            cur.execute("SELECT COALESCE(AVG(decay_state),0) as a FROM nodes WHERE memory_layer='ltm'")
+            avg_decay = round(float(cur.fetchone()['a']), 3)
+
+            # ── Heat map ──
+            cur.execute("""
+                SELECT
+                  SUM(CASE WHEN decay_state>=0.85 THEN 1 ELSE 0 END) as hot,
+                  SUM(CASE WHEN decay_state>=0.6  AND decay_state<0.85 THEN 1 ELSE 0 END) as warm,
+                  SUM(CASE WHEN decay_state>=0.3  AND decay_state<0.6  THEN 1 ELSE 0 END) as cool,
+                  SUM(CASE WHEN decay_state<0.3   THEN 1 ELSE 0 END) as cold
+                FROM nodes WHERE memory_layer='ltm'
+            """)
+            heat = cur.fetchone()
+            heat = {k: int(v or 0) for k, v in heat.items()}
+            total_ltm = max(ltm, 1)
+
+            # ── Pinned nodes ──
+            cur.execute("""
+                SELECT id, content, decay_state, last_accessed,
+                       metadata->>'status' as status,
+                       (SELECT COUNT(*) FROM edges WHERE source_id=id OR target_id=id) as edge_count
+                FROM nodes WHERE pinned=TRUE ORDER BY last_accessed DESC NULLS LAST
+            """)
+            pinned_nodes = [dict(r) for r in cur.fetchall()]
+
+            # ── 7d growth ──
+            cur.execute("SELECT COUNT(*) as c FROM nodes WHERE created_at>=%s", (since_7d,))
+            nodes_7d = cur.fetchone()['c']
+            cur.execute("SELECT COUNT(*) as c FROM edges WHERE created_at>=%s", (since_7d,))
+            edges_7d = cur.fetchone()['c']
+
+            # ── Dream activity 7d ──
+            cur.execute("""
+                SELECT
+                  CASE
+                    WHEN summary LIKE '[process]%%' THEN 'process'
+                    WHEN summary LIKE '[ruminate]%%' THEN 'ruminate'
+                    WHEN summary LIKE '[solo_work]%%' THEN 'solo_work'
+                    ELSE 'other'
+                  END as phase,
+                  COUNT(*) as n,
+                  COALESCE(SUM(EXTRACT(EPOCH FROM (ended_at-started_at))),0) as secs
+                FROM dream_log
+                WHERE ended_at>=%s AND interrupted=FALSE
+                GROUP BY phase ORDER BY n DESC
+            """, (since_7d,))
+            dreams_7d = [dict(r) for r in cur.fetchall()]
+
+            # ── Daily timeline 7d ──
+            cur.execute("""
+                SELECT DATE(timestamp) as day,
+                  SUM(CASE WHEN type='remember' THEN 1 ELSE 0 END) as remembers,
+                  SUM(CASE WHEN type='recall' THEN 1 ELSE 0 END) as recalls,
+                  SUM(CASE WHEN type IN ('dream','rumination','solo_work') THEN 1 ELSE 0 END) as autonomous
+                FROM activity WHERE timestamp>=%s
+                GROUP BY day ORDER BY day ASC
+            """, (since_7d,))
+            timeline = [dict(r) for r in cur.fetchall()]
+
+            # ── At-risk nodes (LTM, low decay) ──
+            cur.execute("""
+                SELECT id, content, decay_state, last_accessed
+                FROM nodes WHERE memory_layer='ltm' AND decay_state < 0.25
+                ORDER BY decay_state ASC LIMIT 5
+            """)
+            at_risk = [dict(r) for r in cur.fetchall()]
+
+            # ── STM inbox preview ──
+            cur.execute("SELECT id, content, captured_at FROM stm_nodes ORDER BY captured_at DESC LIMIT 5")
+            inbox_items = [dict(r) for r in cur.fetchall()]
+
+    finally:
+        put_conn(conn)
+
+    # ── Session nudges ──
+    try:
+        session_resp = session_dashboard()
+        nudges = json.loads(session_resp.get_data(as_text=True)).get('nudges', [])
+    except Exception:
+        nudges = []
+
+    # ── Budget ──
+    daily_cost = get_daily_cost()
+    cfg = load_config()
+    daily_cap = cfg.get('budget', {}).get('daily_cap', 2.0)
+    budget_pct = min(int(daily_cost / max(daily_cap, 0.0001) * 100), 100)
+    budget_color = '#3fb950' if budget_pct < 60 else '#d29922' if budget_pct < 85 else '#f85149'
+
+    # ── Helpers ──
+    def pct(n): return round(n / total_ltm * 100)
+    def bar(n, color):
+        w = pct(n)
+        return f'<div class="bar-fill" style="width:{w}%;background:{color}" title="{n} nodes ({w}%)"></div>'
+    def decay_bar(d):
+        c = '#3fb950' if d >= 0.85 else '#58a6ff' if d >= 0.6 else '#d29922' if d >= 0.3 else '#f85149'
+        return f'<div class="decay-track"><div class="decay-fill" style="width:{int(d*100)}%;background:{c}"></div></div>'
+    def fmt_date(val):
+        if not val: return '<span class="muted">never</span>'
+        s = str(val)[:10]
+        try:
+            from datetime import date
+            delta = (date.today() - date.fromisoformat(s)).days
+            flag = f' <span class="muted">⚠ {delta}d ago</span>' if delta > 7 else ''
+        except Exception:
+            flag = ''
+        return s + flag
+    def trunc(s, n=80):
+        s = str(s or '')
+        return (s[:n] + '…') if len(s) > n else s
+
+    phase_icons = {'process': '🌙', 'ruminate': '🤔', 'solo_work': '🔭', 'other': '💭'}
+    dream_rows = ''.join(
+        f'<tr><td>{phase_icons.get(d["phase"],"💭")} {d["phase"]}</td>'
+        f'<td>{d["n"]}</td><td>{round(float(d["secs"])/60,1)}m</td></tr>'
+        for d in dreams_7d
+    ) or '<tr><td colspan="3" class="muted">No dreams recorded</td></tr>'
+
+    pinned_rows = ''.join(
+        f'<tr><td class="node-id">{n["id"]}</td>'
+        f'<td style="display:flex;align-items:center;gap:6px">{decay_bar(float(n["decay_state"] or 0))}'
+        f'<span class="muted" style="font-size:0.8em">{float(n["decay_state"] or 0):.2f}</span></td>'
+        f'<td>{int(n["edge_count"])}</td><td>{fmt_date(n["last_accessed"])}</td>'
+        f'<td class="muted">{n["status"] or ""}</td></tr>'
+        for n in pinned_nodes
+    ) or '<tr><td colspan="5" class="muted">No pinned nodes</td></tr>'
+
+    risk_rows = ''.join(
+        f'<tr><td class="node-id">{n["id"]}</td>'
+        f'<td style="color:#f85149">{float(n["decay_state"] or 0):.3f}</td>'
+        f'<td class="muted">{trunc(n["content"], 70)}</td></tr>'
+        for n in at_risk
+    ) or '<tr><td colspan="3" class="muted">None at risk</td></tr>'
+
+    inbox_rows = ''.join(
+        f'<tr><td class="muted" style="font-size:0.8em;white-space:nowrap">{str(i.get("created_at",""))[:16]}</td>'
+        f'<td>{trunc(i["content"], 90)}</td></tr>'
+        for i in inbox_items
+    ) or '<tr><td colspan="2" class="muted">Inbox empty</td></tr>'
+
+    nudge_html = ''.join(
+        f'<div class="nudge"><span class="nudge-id">{nd.get("id","")}</span> {trunc(nd.get("note",""), 120)}</div>'
+        for nd in nudges[:6]
+    ) or '<span class="muted">No nudges pending</span>'
+
+    tl_labels = json.dumps([str(r['day']) for r in timeline])
+    tl_rem    = json.dumps([int(r['remembers']) for r in timeline])
+    tl_rec    = json.dumps([int(r['recalls']) for r in timeline])
+    tl_auto   = json.dumps([int(r['autonomous']) for r in timeline])
+    generated = now.strftime('%Y-%m-%d %H:%M UTC')
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="120">
+<title>Somnia Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+  :root{{--bg:#0d1117;--fg:#c9d1d9;--surface:#161b22;--surface2:#21262d;--border:#30363d;--accent:#58a6ff;--muted:#8b949e;--green:#3fb950;--yellow:#d29922;--red:#f85149;--purple:#bc8cff}}
+  *{{margin:0;padding:0;box-sizing:border-box}}
+  body{{background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5}}
+  header{{background:var(--surface);border-bottom:1px solid var(--border);padding:0.75rem 1.5rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem}}
+  header h1{{font-size:1.1rem;color:var(--accent);letter-spacing:0.02em}}
+  .meta{{color:var(--muted);font-size:0.8rem}}
+  nav a{{color:var(--muted);text-decoration:none;margin-left:1rem;font-size:0.85rem}}
+  nav a:hover{{color:var(--accent)}}
+  .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;padding:1rem 1.5rem}}
+  .grid-wide{{grid-column:1/-1}}
+  .card{{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1rem}}
+  .card-title{{font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin-bottom:0.75rem}}
+  .stat-row{{display:flex;gap:1.5rem;flex-wrap:wrap}}
+  .stat{{text-align:center}}
+  .stat .num{{font-size:2rem;font-weight:700;line-height:1}}
+  .stat .lbl{{font-size:0.75rem;color:var(--muted);margin-top:0.2rem}}
+  .heat-row{{display:flex;align-items:center;gap:0.5rem;margin:0.3rem 0;font-size:0.85rem}}
+  .heat-row .label{{width:130px;flex-shrink:0}}
+  .heat-row .count{{width:2.5rem;text-align:right;color:var(--muted)}}
+  .heat-track{{flex:1;background:var(--surface2);border-radius:3px;height:14px;overflow:hidden}}
+  .bar-fill{{height:100%;border-radius:3px}}
+  .decay-track{{background:var(--surface2);border-radius:3px;height:8px;overflow:hidden;width:80px;flex-shrink:0}}
+  .decay-fill{{height:100%;border-radius:3px}}
+  table{{width:100%;border-collapse:collapse;font-size:0.85rem}}
+  th{{color:var(--muted);text-align:left;font-weight:500;padding:0.3rem 0.5rem;border-bottom:1px solid var(--border);font-size:0.72rem;text-transform:uppercase;letter-spacing:0.05em}}
+  td{{padding:0.35rem 0.5rem;border-bottom:1px solid var(--border);vertical-align:middle}}
+  tr:last-child td{{border-bottom:none}}
+  .node-id{{font-family:'SFMono-Regular',Consolas,monospace;font-size:0.8rem;color:var(--accent)}}
+  .muted{{color:var(--muted)}}
+  .budget-track{{background:var(--surface2);border-radius:4px;height:14px;overflow:hidden;margin-top:0.4rem}}
+  .budget-fill{{height:100%;border-radius:4px}}
+  canvas{{max-height:200px}}
+  .nudge{{background:var(--surface2);border-left:3px solid var(--purple);border-radius:4px;padding:0.5rem 0.75rem;margin:0.4rem 0;font-size:0.85rem}}
+  .nudge-id{{color:var(--accent);font-family:monospace;font-size:0.8rem;margin-right:0.4rem}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🧠 Somnia Dashboard</h1>
+  <nav>
+    <a href="/somnia/api/analytics?format=html&days=7">Analytics (7d)</a>
+    <a href="/somnia/api/analytics?format=html&days=30">Analytics (30d)</a>
+    <a href="/portal">Portal</a>
+  </nav>
+  <span class="meta">↻ auto-refresh 120s &nbsp;·&nbsp; {generated}</span>
+</header>
+
+<div class="grid">
+
+  <!-- Graph Stats -->
+  <div class="card">
+    <div class="card-title">Graph</div>
+    <div class="stat-row">
+      <div class="stat"><div class="num">{ltm}</div><div class="lbl">LTM Nodes</div></div>
+      <div class="stat"><div class="num" style="color:var(--muted)">{sltm}</div><div class="lbl">SLTM Faded</div></div>
+      <div class="stat"><div class="num">{edges}</div><div class="lbl">Edges</div></div>
+      <div class="stat"><div class="num" style="color:var(--yellow)">{inbox}</div><div class="lbl">STM Inbox</div></div>
+      <div class="stat"><div class="num" style="color:var(--purple)">{pinned_count}</div><div class="lbl">Pinned</div></div>
+    </div>
+  </div>
+
+  <!-- Budget -->
+  <div class="card">
+    <div class="card-title">Daily Budget</div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <span style="font-size:1.6rem;font-weight:700;color:{budget_color}">${daily_cost:.4f}</span>
+      <span class="muted">/ ${daily_cap:.2f} cap</span>
+    </div>
+    <div class="budget-track"><div class="budget-fill" style="width:{budget_pct}%;background:{budget_color}"></div></div>
+    <div class="muted" style="font-size:0.78rem;margin-top:0.3rem">{budget_pct}% used &nbsp;·&nbsp; ${daily_cap - daily_cost:.4f} remaining</div>
+  </div>
+
+  <!-- Heat Map -->
+  <div class="card">
+    <div class="card-title">Memory Heat Map (LTM) &nbsp;·&nbsp; avg {avg_decay}</div>
+    <div class="heat-row"><span class="label">🔥 Hot (≥0.85)</span><div class="heat-track">{bar(heat["hot"],"#3fb950")}</div><span class="count">{heat["hot"]}</span></div>
+    <div class="heat-row"><span class="label">🌡 Warm (0.6–0.85)</span><div class="heat-track">{bar(heat["warm"],"#58a6ff")}</div><span class="count">{heat["warm"]}</span></div>
+    <div class="heat-row"><span class="label">🌤 Cool (0.3–0.6)</span><div class="heat-track">{bar(heat["cool"],"#d29922")}</div><span class="count">{heat["cool"]}</span></div>
+    <div class="heat-row"><span class="label">🥶 Cold (&lt;0.3)</span><div class="heat-track">{bar(heat["cold"],"#f85149")}</div><span class="count">{heat["cold"]}</span></div>
+  </div>
+
+  <!-- 7d Summary -->
+  <div class="card">
+    <div class="card-title">7-Day Growth</div>
+    <div class="stat-row" style="margin-bottom:0.75rem">
+      <div class="stat"><div class="num" style="color:var(--green)">{nodes_7d}</div><div class="lbl">New Nodes</div></div>
+      <div class="stat"><div class="num" style="color:var(--accent)">{edges_7d}</div><div class="lbl">New Edges</div></div>
+    </div>
+    <div class="card-title" style="margin-top:0.5rem">Dream Phases</div>
+    <table><thead><tr><th>Phase</th><th>Sessions</th><th>Time</th></tr></thead>
+    <tbody>{dream_rows}</tbody></table>
+  </div>
+
+  <!-- Timeline chart -->
+  <div class="card grid-wide">
+    <div class="card-title">Activity Timeline — Last 7 Days</div>
+    <canvas id="tlChart"></canvas>
+  </div>
+
+  <!-- Pinned Nodes -->
+  <div class="card grid-wide">
+    <div class="card-title">Pinned Nodes</div>
+    <table><thead><tr><th>Node</th><th>Decay</th><th>Edges</th><th>Last Active</th><th>Status</th></tr></thead>
+    <tbody>{pinned_rows}</tbody></table>
+  </div>
+
+  <!-- Nudges -->
+  <div class="card grid-wide">
+    <div class="card-title">Dream Nudges</div>
+    {nudge_html}
+  </div>
+
+  <!-- STM Inbox -->
+  <div class="card">
+    <div class="card-title">STM Inbox (latest {min(5,inbox)} of {inbox})</div>
+    <table><thead><tr><th>Time</th><th>Content</th></tr></thead>
+    <tbody>{inbox_rows}</tbody></table>
+  </div>
+
+  <!-- At-Risk -->
+  <div class="card">
+    <div class="card-title">At-Risk LTM Nodes (decay &lt; 0.25)</div>
+    <table><thead><tr><th>Node</th><th>Decay</th><th>Content</th></tr></thead>
+    <tbody>{risk_rows}</tbody></table>
+  </div>
+
+</div>
+<script>
+new Chart(document.getElementById('tlChart').getContext('2d'), {{
+  type: 'bar',
+  data: {{
+    labels: {tl_labels},
+    datasets: [
+      {{ label: 'Remembers', data: {tl_rem}, backgroundColor: '#58a6ff66', borderColor: '#58a6ff', borderWidth: 1 }},
+      {{ label: 'Recalls',   data: {tl_rec}, backgroundColor: '#3fb95066', borderColor: '#3fb950', borderWidth: 1 }},
+      {{ label: 'Autonomous',data: {tl_auto},backgroundColor: '#bc8cff66', borderColor: '#bc8cff', borderWidth: 1 }}
+    ]
+  }},
+  options: {{
+    responsive: true, maintainAspectRatio: true,
+    plugins: {{ legend: {{ labels: {{ color: '#c9d1d9', boxWidth: 12 }} }} }},
+    scales: {{
+      x: {{ ticks: {{ color: '#8b949e' }}, grid: {{ color: '#30363d' }} }},
+      y: {{ ticks: {{ color: '#8b949e' }}, grid: {{ color: '#30363d' }}, beginAtZero: true }}
+    }}
+  }}
+}});
+</script>
+</body>
+</html>"""
+
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
