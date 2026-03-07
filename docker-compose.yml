@@ -101,6 +101,26 @@ services:
       timeout: 10s
       retries: 3
 
+  forge:
+    build:
+      context: forge
+      dockerfile: Dockerfile
+    container_name: forge
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+    volumes:
+      - ${SOMNIA_DATA_ROOT:-/volume1/docker/somnia}/forge/workspace:/workspace
+      - ${SOMNIA_DATA_ROOT:-/volume1/docker/somnia}/outputs:/outputs
+      - ${SOMNIA_DATA_ROOT:-/volume1/docker/somnia}/repos:/repos
+    networks:
+      - mcp-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 volumes:
   pgdata:
   quies-data:
