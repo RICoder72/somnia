@@ -1,6 +1,6 @@
 # Context Types in Somnia
 
-Somnia differentiates between types of knowledge and context. This replaces Super Claude's flat "domain" concept with something richer.
+Somnia differentiates between types of knowledge and context. This replaces Somnia's flat "domain" concept with something richer.
 
 ## The Five Context Types
 
@@ -296,13 +296,13 @@ Edges connect them:
 
 ---
 
-## Migration from Super Claude Domains
+## Migration from Somnia Domains
 
-| Super Claude Domain | Somnia Context Type |
+| Somnia Domain | Somnia Context Type |
 |---------------------|---------------------|
 | burrillville | Job |
 | bite-club | Project |
-| super-claude | Project |
+| somnia | Project |
 | somnia | Project |
 | quantum | Interest |
 | gaming | Interest |

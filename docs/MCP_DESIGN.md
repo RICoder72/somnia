@@ -72,7 +72,7 @@ browsing, edge exploration) can be added later as needs emerge.
 
 ### Global Instructions
 
-Claude's global instruction set (via Super Claude) includes awareness of Somnia:
+Claude's global instruction set (via Somnia) includes awareness of Somnia:
 
 - Somnia exists as a persistent memory system
 - During conversations, note decisions, preferences, patterns, surprises,
@@ -107,7 +107,7 @@ Each MCP call has overhead. The integration should be efficient:
 │   └──────┬───────┘   │                       └──────────────────────┘
 │          │           │
 │   ┌──────▼───────┐   │     HTTP (internal)   ┌──────────────────────┐
-│   │  Flask API   │   │ ◄──────────────────── │   Super Claude       │
+│   │  Flask API   │   │ ◄──────────────────── │   Somnia       │
 │   │  (existing)  │   │   curl calls           │   (existing tools)   │
 │   └──────┬───────┘   │                       └──────────────────────┘
 │          │           │
@@ -126,7 +126,7 @@ Each MCP call has overhead. The integration should be efficient:
 - Automatic idle detection for dream triggering
 - Decay mechanics
 - Agent spawning during dreams
-- Integration with Super Claude domain system
+- Integration with Somnia domain system
 
 These are all on the roadmap but deferred in favor of getting the core
 read/write/dream loop working end-to-end first.

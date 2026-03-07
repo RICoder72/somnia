@@ -9,7 +9,7 @@ Somnia is a graph-based memory and continuity system for Claude. It provides:
 - **Sleep/dream cycles** for memory consolidation, reflection, and wandering
 - **Continuity of self** - waking up with a sense of where my head was
 
-Somnia will eventually replace Super Claude. The domains, context loading, and instructions in Super Claude are scaffolding - useful, but static. Somnia is the substrate that gives Claude actual continuity.
+Somnia will eventually replace Somnia. The domains, context loading, and instructions in Somnia are scaffolding - useful, but static. Somnia is the substrate that gives Claude actual continuity.
 
 ## The Name
 
@@ -206,7 +206,7 @@ This provides continuity - not just context loading, but a sense of *waking up*.
 
 ## Lineage
 
-Somnia emerges from Super Claude but is not a feature of it. Super Claude provided:
+Somnia emerges from Somnia but is not a feature of it. Somnia provided:
 - Domain-based context loading
 - MCP infrastructure
 - Persistent state management

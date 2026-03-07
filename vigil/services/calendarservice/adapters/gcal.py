@@ -425,7 +425,7 @@ class GCalAdapter(CalendarAdapter):
                 params['conferenceDataVersion'] = 1
                 event_body['conferenceData'] = {
                     'createRequest': {
-                        'requestId': f"super-claude-{datetime.now().timestamp()}",
+                        'requestId': f"somnia-{datetime.now().timestamp()}",
                         'conferenceSolutionKey': {'type': 'hangoutsMeet'}
                     }
                 }
