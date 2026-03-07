@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is Vigil
 
-Vigil is an MCP (Model Context Protocol) server built with FastMCP that provides filesystem, git, shell, context/domain management, publishing, and external service integrations (mail, calendar, contacts, storage, supernote). It runs as a Docker container in the "Project Constellation" architecture, exposing tools over HTTP on port 8000 at `/vigil`.
+Vigil is an MCP (Model Context Protocol) server built with FastMCP that provides filesystem, git, shell, context/domain management, publishing, and external service integrations (mail, calendar, contacts, storage, supernote). It runs as a Docker container in the "Somnia" architecture, exposing tools over HTTP on port 8000 at `/vigil`.
 
 ## Build & Run
 
@@ -14,7 +14,7 @@ docker build -t vigil:latest .
 
 # Run (requires mcp-net Docker network and /data volume mount)
 docker run -d --name vigil --network mcp-net --expose 8000 \
-  -v /volume1/docker/super-claude:/data \
+  -v /volume1/docker/somnia:/data \
   -e CREDENTIALS_API_KEY=<key> vigil:latest
 ```
 

@@ -202,7 +202,7 @@ def container_start(
     registry = _load_fleet_registry()
     reg = registry.get(container, {})
 
-    img = image or reg.get("image", container.replace("constellation-", ""))
+    img = image or reg.get("image", container.replace("somnia-", ""))
     restart_policy = reg.get("restart", "unless-stopped")
 
     cmd = f"docker run -d --name {container} --restart {restart_policy} --network {DOCKER_NETWORK}"
@@ -431,9 +431,9 @@ def forge_start() -> str:
         "--name forge "
         "--network mcp-net "
         "-p 8003:8003 "
-        "-v /volume1/docker/super-claude/forge/workspace:/workspace "
-        "-v /volume1/docker/super-claude/outputs:/outputs "
-        "-v /volume1/docker/super-claude/repos:/repos "
+        "-v /volume1/docker/somnia/forge/workspace:/workspace "
+        "-v /volume1/docker/somnia/outputs:/outputs "
+        "-v /volume1/docker/somnia/repos:/repos "
         "--restart unless-stopped "
         "forge"
     )
