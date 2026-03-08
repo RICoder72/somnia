@@ -121,14 +121,6 @@ services:
       timeout: 10s
       retries: 3
 
-volumes:
-  pgdata:
-  quies-data:
-
-networks:
-  mcp-net:
-    external: true
-
   router:
     image: nginx:alpine
     container_name: somnia-router
@@ -148,3 +140,11 @@ networks:
       timeout: 10s
       retries: 3
       start_period: 5s
+
+volumes:
+  pgdata:
+  quies-data:
+
+networks:
+  mcp-net:
+    external: true
