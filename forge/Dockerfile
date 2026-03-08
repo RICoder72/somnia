@@ -41,6 +41,6 @@ RUN git config --global --add safe.directory '*'
 EXPOSE 8003
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8003/forge')" 2>/dev/null || exit 1
+  CMD python3 -c "import socket; socket.create_connection(('localhost', 8003), timeout=5).close()"
 
 CMD ["python", "/app/server.py"]
