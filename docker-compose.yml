@@ -77,10 +77,11 @@ services:
     networks:
       - mcp-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/vigil | grep -qE '[24][0-9][0-9]|406'"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 10s
 
   fabrica:
     build:
@@ -96,10 +97,11 @@ services:
     networks:
       - mcp-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/"]
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8001/fabrica | grep -qE '[24][0-9][0-9]|406'"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 10s
 
   forge:
     build:
@@ -116,10 +118,31 @@ services:
     networks:
       - mcp-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003/"]
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8003/forge | grep -qE '[24][0-9][0-9]|406'"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 10s
+
+  portal:
+    build:
+      context: portal
+      dockerfile: Dockerfile
+    container_name: portal
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    volumes:
+      - ${SOMNIA_CONFIG_DIR:-./config}:/data/config:ro
+      - ${SOMNIA_DOMAINS_DIR:-./domains}:/data/domains:ro
+    networks:
+      - mcp-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/portal/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   router:
     image: nginx:alpine
