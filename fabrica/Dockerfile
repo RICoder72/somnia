@@ -29,6 +29,6 @@ RUN git config --global --add safe.directory /data && \
 EXPOSE 8001
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8001/fabrica')" 2>/dev/null || exit 1
+  CMD python3 -c "import socket; socket.create_connection(('localhost', 8001), timeout=5).close()"
 
 CMD ["python", "server.py"]
