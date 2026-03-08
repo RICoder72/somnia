@@ -74,6 +74,7 @@ services:
     environment:
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
       CREDENTIALS_API_KEY: ${CREDENTIALS_API_KEY:-}
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-somnia}:${POSTGRES_PASSWORD}@somnia-postgres:5432/somnia"
     networks:
       - mcp-net
     healthcheck:
@@ -135,10 +136,12 @@ services:
     volumes:
       - ${SOMNIA_CONFIG_DIR:-./config}:/data/config:ro
       - ${SOMNIA_DOMAINS_DIR:-./domains}:/data/domains:ro
+    environment:
+      PORTAL_DB_URL: "postgresql://${POSTGRES_USER:-somnia}:${POSTGRES_PASSWORD}@somnia-postgres:5432/somnia"
     networks:
       - mcp-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/portal/health"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/portal/health')\""]
       interval: 30s
       timeout: 10s
       retries: 3
