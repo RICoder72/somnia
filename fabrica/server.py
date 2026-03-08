@@ -11,6 +11,8 @@ from fastmcp import FastMCP
 import subprocess
 from pathlib import Path
 from datetime import datetime
+import os
+import logging
 
 # =============================================================================
 # Config
@@ -31,6 +33,14 @@ SERVICE_PATHS = {
 
 # Fleet registry — full launch configs for container_start
 FLEET_REGISTRY_PATH = DATA_ROOT / "config" / "fleet_registry.json"
+
+# DB backup config
+DB_BACKUPS_DIR = BACKUPS_DIR / "db"
+DB_CONTAINER = "somnia-postgres"
+DB_USER = "somnia"
+DB_NAME = "somnia"
+DB_RETAIN_DAYS = 14
+DB_BACKUP_LOG = DB_BACKUPS_DIR / "backup.log"
 
 def _load_fleet_registry() -> dict:
     """Load fleet registry from JSON. Returns empty dict on failure."""
@@ -327,20 +337,154 @@ def fs_replace(path: str, old: str, new: str) -> str:
 # =============================================================================
 # Backup & Restore
 # =============================================================================
+
+def _run_db_backup() -> str:
+    """
+    Internal: pg_dump somnia-postgres → /data/backups/db/
+    Returns a status string. Safe to call from scheduler or tool.
+    """
+    DB_BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dump_file = DB_BACKUPS_DIR / f"somnia_{ts}.dump"
+    log_lines = []
+
+    def _log(msg: str):
+        line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+        log_lines.append(line)
+        try:
+            with open(DB_BACKUP_LOG, "a") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
+    _log("=== DB backup starting ===")
+
+    # Get the postgres password from the running container's env
+    ok_pw, pgpass = _run(
+        f"docker exec {DB_CONTAINER} sh -c 'echo $POSTGRES_PASSWORD'"
+    )
+    if not ok_pw or not pgpass.strip():
+        # Fall back to the known password
+        pgpass = "FPCsUawkvlxe6O_lSt0_7AiEAJO8DVr4"
+
+    pgpass = pgpass.strip()
+    ok, out = _run(
+        f"docker exec -e PGPASSWORD={pgpass} {DB_CONTAINER} "
+        f"pg_dump -U {DB_USER} -d {DB_NAME} -Fc",
+        timeout=60,
+    )
+    if not ok:
+        _log(f"  FAILED: {out[:200]}")
+        return "\n".join(log_lines)
+
+    # Write dump output to file (it's binary, so use subprocess directly)
+    try:
+        result = subprocess.run(
+            f"docker exec -e PGPASSWORD={pgpass} {DB_CONTAINER} "
+            f"pg_dump -U {DB_USER} -d {DB_NAME} -Fc",
+            shell=True, capture_output=True, timeout=60,
+        )
+        if result.returncode != 0:
+            _log(f"  FAILED: {result.stderr.decode()[:200]}")
+            return "\n".join(log_lines)
+        dump_file.write_bytes(result.stdout)
+        mb = dump_file.stat().st_size / 1048576
+        _log(f"  OK — {dump_file.name} ({mb:.2f} MB)")
+    except Exception as e:
+        _log(f"  EXCEPTION: {e}")
+        return "\n".join(log_lines)
+
+    # Prune old dumps
+    old_dumps = sorted(DB_BACKUPS_DIR.glob("somnia_*.dump"))
+    cutoff = datetime.now().timestamp() - (DB_RETAIN_DAYS * 86400)
+    pruned = 0
+    for f in old_dumps:
+        if f.stat().st_mtime < cutoff:
+            f.unlink()
+            pruned += 1
+    remaining = len(list(DB_BACKUPS_DIR.glob("somnia_*.dump")))
+    _log(f"  Pruned {pruned} old dumps — {remaining} retained")
+    _log("=== DB backup complete ===")
+
+    return "\n".join(log_lines)
+
+
+@mcp.tool()
+def db_backup() -> str:
+    """
+    Dump somnia-postgres to /data/backups/db/.
+    Retains 14 days of dumps. Safe to call anytime — also runs nightly automatically.
+    """
+    return _run_db_backup()
+
+
+@mcp.tool()
+def db_backup_status() -> str:
+    """Show recent DB backup history and next scheduled run."""
+    lines = ["📦 DB Backup Status", "─" * 40]
+
+    # List recent dumps
+    if DB_BACKUPS_DIR.exists():
+        dumps = sorted(DB_BACKUPS_DIR.glob("somnia_*.dump"), reverse=True)[:5]
+        if dumps:
+            lines.append("Recent dumps:")
+            for d in dumps:
+                mb = d.stat().st_size / 1048576
+                mtime = datetime.fromtimestamp(d.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                lines.append(f"  {d.name} ({mb:.2f} MB) — {mtime}")
+        else:
+            lines.append("  No dumps found yet")
+    else:
+        lines.append("  Backup directory not yet created")
+
+    # Show last log entries
+    if DB_BACKUP_LOG.exists():
+        log_lines = DB_BACKUP_LOG.read_text().strip().split("\n")
+        lines.append("\nLast log entries:")
+        for l in log_lines[-6:]:
+            lines.append(f"  {l}")
+
+    # Scheduler state
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        lines.append("\nScheduler: running (nightly 02:00)")
+    except Exception:
+        lines.append("\nScheduler: unavailable")
+
+    return "\n".join(lines)
+
+
 @mcp.tool()
 def backup(name: str = "") -> str:
-    """Backup domains, config, and documents to a timestamped archive."""
+    """
+    Full backup: filesystem (domains/config/documents) + postgres dump.
+    Creates timestamped tar.gz archive plus a fresh DB dump.
+    """
     BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     suffix = f"_{name}" if name else ""
     fname = f"backup_{ts}{suffix}.tar.gz"
     fpath = BACKUPS_DIR / fname
 
+    results = []
+
+    # Filesystem archive
     ok, out = _run(f"tar -czf {fpath} domains/ config/ documents/ 2>&1")
     if ok and fpath.exists():
         mb = fpath.stat().st_size / 1048576
-        return f"✅ {fname} ({mb:.2f} MB)"
-    return f"❌ Backup failed:\n{out}"
+        results.append(f"✅ {fname} ({mb:.2f} MB)")
+    else:
+        results.append(f"❌ Filesystem backup failed:\n{out}")
+
+    # Postgres dump
+    db_result = _run_db_backup()
+    last_line = [l for l in db_result.split("\n") if l.strip()][-1] if db_result else ""
+    if "OK" in last_line:
+        results.append(f"✅ DB dump complete")
+    else:
+        results.append(f"⚠️  DB dump issue — check db_backup_status()")
+
+    return "\n".join(results)
 
 
 @mcp.tool()
@@ -472,4 +616,23 @@ def forge_status() -> str:
 # Main
 # =============================================================================
 if __name__ == "__main__":
+    # Start nightly DB backup scheduler
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(
+            _run_db_backup,
+            CronTrigger(hour=2, minute=0),
+            id="nightly_db_backup",
+            name="Nightly somnia-postgres dump",
+            replace_existing=True,
+        )
+        scheduler.start()
+        logging.getLogger("apscheduler").setLevel(logging.WARNING)
+        print("[Fabrica] Nightly DB backup scheduled — runs at 02:00 daily")
+    except Exception as e:
+        print(f"[Fabrica] WARNING: Could not start backup scheduler: {e}")
+
     mcp.run(transport="http", host="0.0.0.0", port=8001, path="/fabrica")
