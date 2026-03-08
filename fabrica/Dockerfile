@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml server.py ./
 RUN uv pip install --system -e .
+RUN uv pip install --system apscheduler>=3.10.0
 
 RUN git config --global --add safe.directory /data && \
     git config --global user.email "claude@super-claude.local" && \
