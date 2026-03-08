@@ -25,10 +25,10 @@ DOMAIN_TRIGGERS_FILE = CONFIG_DIR / "domain_triggers.json"
 # Storage config (for Phase B — services)
 STORAGE_CONFIG = CONFIG_DIR / "storage_accounts.json"
 
-# Database (shared Constellation PostgreSQL)
+# Database (shared Somnia PostgreSQL)
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://constellation:FPCsUawkvlxe6O_lSt0_7AiEAJO8DVr4@constellation-postgres:5432/constellation",
+    "postgresql://somnia:changeme@somnia-postgres:5432/somnia",
 )
 POOL_MIN_SIZE = int(os.environ.get("POOL_MIN_SIZE", "2"))
 POOL_MAX_SIZE = int(os.environ.get("POOL_MAX_SIZE", "10"))
