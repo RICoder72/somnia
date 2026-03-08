@@ -6,5 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=2.0.0",
     "uvicorn>=0.30.0",
-    "apscheduler>=3.10.0",
 ]
+
+[tool.setuptools]
+py-modules = ["server"]
