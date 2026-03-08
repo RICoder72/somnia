@@ -334,22 +334,53 @@ def fs_replace(path: str, old: str, new: str) -> str:
 
 def _run_db_backup() -> str:
     """
-    Internal: run db_backup_cron.py directly.
-    Returns log output. Safe to call from tool or scheduler.
+    Internal: pg_dump somnia-postgres → /data/backups/db/
+    Uses _run() so docker is on PATH. Safe to call from tool or cron.
     """
+    DB_BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dump_file = DB_BACKUPS_DIR / f"somnia_{ts}.dump"
+    log_lines = []
+
+    def _log(msg: str):
+        entry = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+        log_lines.append(entry)
+        try:
+            with open(DB_BACKUP_LOG, "a") as f:
+                f.write(entry + "\n")
+        except Exception:
+            pass
+
+    _log("=== DB backup starting ===")
+
+    # Get postgres password from container env
+    ok_pw, pgpass = _run("docker exec somnia-postgres sh -c 'echo $POSTGRES_PASSWORD'", timeout=10)
+    pgpass = pgpass.strip() if ok_pw and pgpass.strip() else "FPCsUawkvlxe6O_lSt0_7AiEAJO8DVr4"
+
+    # Run pg_dump and write binary output directly
     try:
         result = subprocess.run(
-            ["python", "/app/db_backup_cron.py"],
-            capture_output=True, text=True, timeout=180
+            f"docker exec -e PGPASSWORD={pgpass} somnia-postgres pg_dump -U somnia -d somnia -Fc",
+            shell=True, capture_output=True, timeout=120
         )
-        out = result.stdout.strip()
-        if result.stderr.strip():
-            out += f"\n{result.stderr.strip()}"
-        return out if out else "No output — check /data/backups/db/backup.log"
-    except subprocess.TimeoutExpired:
-        return "❌ Backup timed out after 180s"
+        if result.returncode != 0:
+            _log(f"  FAILED: {result.stderr.decode()[:300]}")
+            return "\n".join(log_lines)
+        dump_file.write_bytes(result.stdout)
+        mb = dump_file.stat().st_size / 1048576
+        _log(f"  OK — {dump_file.name} ({mb:.2f} MB)")
     except Exception as e:
-        return f"❌ {e}"
+        _log(f"  EXCEPTION: {e}")
+        return "\n".join(log_lines)
+
+    # Prune dumps older than 14 days
+    cutoff = datetime.now().timestamp() - (14 * 86400)
+    pruned = sum(1 for f in DB_BACKUPS_DIR.glob("somnia_*.dump")
+                 if f.stat().st_mtime < cutoff and f.unlink() is None)
+    remaining = len(list(DB_BACKUPS_DIR.glob("somnia_*.dump")))
+    _log(f"  Pruned {pruned} old dump(s) — {remaining} retained")
+    _log("=== Backup complete ===")
+    return "\n".join(log_lines)
 
 
 @mcp.tool()
