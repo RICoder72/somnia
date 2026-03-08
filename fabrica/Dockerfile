@@ -19,21 +19,17 @@ RUN apt-get update && \
 
 RUN pip install --no-cache-dir uv
 
-COPY pyproject.toml server.py ./
+COPY pyproject.toml server.py db_backup_cron.py docker-entrypoint.sh ./
 RUN uv pip install --system -e .
+RUN chmod +x /app/docker-entrypoint.sh
 
 RUN git config --global --add safe.directory /data && \
     git config --global user.email "claude@somnia.local" && \
     git config --global user.name "Claude"
-
-# Nightly DB backup cron — 02:00 daily
-# Runs pg_dump inside somnia-postgres and writes to /data/backups/db/
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 8001
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD python3 -c "import socket; socket.create_connection(('localhost', 8001), timeout=5).close()"
 
-CMD ["/docker-entrypoint.sh"]
+CMD ["/app/docker-entrypoint.sh"]
