@@ -174,3 +174,20 @@ volumes:
 networks:
   mcp-net:
     external: true
+
+  watchdog:
+    build:
+      context: ../watchdog
+      dockerfile: Dockerfile
+    container_name: somnia-watchdog
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CHECK_INTERVAL: "30"
+      FAIL_THRESHOLD: "3"
+      RESTART_COOLDOWN: "60"
+    networks:
+      - mcp-net
+    depends_on:
+      - router
