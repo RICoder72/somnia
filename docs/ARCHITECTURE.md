@@ -2,7 +2,7 @@
 
 ## Overview
 
-Somnia is Claude's memory and continuity system — a graph-based substrate that provides persistent memory, autonomous dream cycles, and structural context awareness. It runs as part of the Constellation infrastructure alongside Vigil (operations), Fabrica (fleet management), and Store (structured data).
+Somnia is Claude's memory and continuity system — a graph-based substrate that provides persistent memory, autonomous dream cycles, and structural context awareness. It runs as part of the Somnia system alongside Vigil (operations), Fabrica (fleet management), and Store (structured data).
 
 ## Core Concepts
 
@@ -53,7 +53,7 @@ Each rumination instance can leave a note for the next one — a "letter to your
 
 ## Components
 
-### Somnia Daemon (`daemon/somnia_daemon.py`)
+### Quies Daemon (`daemon/somnia_daemon.py`)
 
 Flask HTTP server that orchestrates everything:
 
@@ -67,7 +67,7 @@ Flask HTTP server that orchestrates everything:
 - **Analytics**: Structured data and rendered reports (markdown, JSON, HTML)
 - **Solo-work**: Produces findings documents and injects observations back into STM
 
-### Somnia MCP Server (`mcp/somnia_mcp.py`)
+### Quies MCP Server (`mcp/somnia_mcp.py`)
 
 FastMCP server exposing tools to Claude during conversations:
 
@@ -83,7 +83,7 @@ FastMCP server exposing tools to Claude during conversations:
 
 ### Database (`daemon/db.py`)
 
-PostgreSQL connection pool (psycopg2) against the shared `constellation-postgres` instance. Database `somnia` with tables:
+PostgreSQL connection pool (psycopg2) against the shared `somnia-postgres` instance. Database `somnia` with tables:
 
 - `nodes` — Memory graph nodes with FTS via tsvector, decay_state, memory_layer, pinned flag, dream_notes (JSONB), reinforcement_count
 - `edges` — Typed, weighted connections between nodes with last_reinforced tracking
@@ -123,7 +123,7 @@ Solo-work uses a separate `findings` JSON format instead of operations.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                     CONSTELLATION (mcp-net)                       │
+│                     SOMNIA (mcp-net)                       │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────────┐  │
@@ -306,4 +306,4 @@ Each scheduler cycle also:
 ```
 
 ---
-*Last updated: 2026-02-26*
+*Last updated: 2026-03-27*

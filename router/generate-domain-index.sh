@@ -19,7 +19,7 @@ cat > "$OUTPUT_FILE" <<'HEADER'
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Constellation — Domain Documents</title>
+  <title>Somnia — Domain Documents</title>
   <style>
     :root { --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a; --text: #e0e0e8; --dim: #8888a0; --accent: #7c93ee; --accent-hover: #9db0ff; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -41,7 +41,7 @@ cat > "$OUTPUT_FILE" <<'HEADER'
 <body>
   <div class="container">
     <h1>Domain Documents</h1>
-    <p class="subtitle">Constellation — self-service artifact browser</p>
+    <p class="subtitle">Somnia — self-service artifact browser</p>
     <ul class="domain-list">
 HEADER
 

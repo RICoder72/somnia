@@ -1,11 +1,11 @@
 """
-Vigil MCP Server — Constellation Core Tools
+Vigil MCP Server — Somnia Core Tools
 
 Everyday tools for filesystem, git, shell, domains, publishing,
 database (entities/schemas/relationships), and external services
 (mail, calendar, contacts, storage).
 
-Part of Project Constellation.
+Part of the Somnia system.
 """
 
 import asyncio

@@ -1,7 +1,7 @@
 """
 Database connection pool and migration runner for Vigil.
 
-Uses asyncpg for PostgreSQL access. Shares the Constellation
+Uses asyncpg for PostgreSQL access. Shares the Somnia
 database with Store (during migration) and eventually owns
 the entity/schema/relationship tables directly.
 """

@@ -1,5 +1,5 @@
 """
-Constellation Portal — collaborative document and reports portal.
+Somnia Portal — collaborative document and reports portal.
 Serves at /portal, behind OAuth via nginx auth_request.
 
 Routes:
@@ -25,7 +25,7 @@ import mimetypes
 import os
 import asyncpg
 
-app = FastAPI(title="Constellation Portal")
+app = FastAPI(title="Somnia Portal")
 
 DOMAINS_ROOT = Path("/data/domains")
 CONFIG_FILE = Path("/data/config/portal.json")
@@ -94,7 +94,7 @@ def html_shell(title: str, body: str, extra_head: str = "") -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{title} — Constellation</title>
+  <title>{title} — Somnia</title>
   {extra_head}
   <style>
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -251,7 +251,7 @@ async def landing():
 
     body = f"""
     <div style="margin-bottom: 32px;">
-      <h1>Constellation Portal</h1>
+      <h1>Somnia Portal</h1>
       <p style="color: var(--muted); margin-top: 6px;">Collaborative workspace — documents, reports, and dashboards.</p>
     </div>
 

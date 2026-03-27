@@ -1,4 +1,4 @@
-"""Type schema tools — absorbed from Constellation Store."""
+"""Type schema tools — part of the Somnia/Vigil Store."""
 
 import json
 from fastmcp import FastMCP

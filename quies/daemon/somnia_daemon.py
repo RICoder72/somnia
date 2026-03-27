@@ -1675,7 +1675,7 @@ def _build_solo_work_prompt(graph_stats):
     try:
         system_prompt = load_prompt("solo_work")
     except FileNotFoundError:
-        system_prompt = "Review pinned projects and Constellation code. Produce a findings JSON."
+        system_prompt = "Review pinned projects and Somnia code. Produce a findings JSON."
 
     nodes = execute(
         "SELECT id, type, content, metadata, decay_state, reinforcement_count, "

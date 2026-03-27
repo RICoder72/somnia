@@ -1,5 +1,5 @@
 """
-Forge MCP — Constellation Workbench
+Forge MCP — Somnia Workbench
 
 Minimal MCP that gives Claude shell access to a rich toolchain:
 Python/GIS/Node environment with persistent workspace and shared outputs.
@@ -23,7 +23,7 @@ OUTPUTS_DIR = Path("/outputs")     # shared with Vigil for publish
 REPOS_DIR   = Path("/repos")       # NAS repos mount
 ALLOWED_ROOTS = [WORKSPACE, OUTPUTS_DIR, REPOS_DIR, Path("/tmp")]
 
-mcp = FastMCP("Constellation Forge")
+mcp = FastMCP("Somnia Forge")
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
