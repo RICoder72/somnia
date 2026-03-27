@@ -1,4 +1,4 @@
-# Somnia Wakeup Queries
+# Quies Wakeup Queries
 
 Queries to run at session startup to provide continuity.
 
@@ -85,7 +85,7 @@ ORDER BY captured_at DESC;
 
 ## Usage
 
-At session startup, Somnia can run these queries and present a brief summary:
+At session startup, Quies can run these queries and present a brief summary:
 
 - "Last dream: [summary]. I was thinking about [nodes visited]."
 - "Open questions: [list]"

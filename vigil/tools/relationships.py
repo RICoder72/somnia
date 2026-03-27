@@ -1,4 +1,4 @@
-"""Relationship tools — absorbed from Constellation Store."""
+"""Relationship tools — part of the Somnia/Vigil Store."""
 
 import json
 import uuid

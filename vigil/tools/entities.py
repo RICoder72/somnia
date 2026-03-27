@@ -1,4 +1,4 @@
-"""Entity CRUD tools — absorbed from Constellation Store."""
+"""Entity CRUD tools — part of the Somnia/Vigil Store."""
 
 import json
 import uuid

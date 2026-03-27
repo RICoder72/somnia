@@ -13,10 +13,10 @@ DOMAINS_DIR = DATA_ROOT / "domains"
 CONFIG_DIR = DATA_ROOT / "config"
 OUTPUTS_DIR = DATA_ROOT / "outputs"
 
-# Docker network (Constellation)
+# Docker network (Somnia)
 DOCKER_NETWORK = "mcp-net"
 
-# Public URL for published outputs (served via Constellation router)
+# Public URL for published outputs (served via Somnia router)
 PUBLIC_BASE_URL = "https://zanni.synology.me/output"
 
 # Domain config

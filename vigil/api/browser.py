@@ -22,7 +22,7 @@ BROWSER_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Constellation — Files</title>
+<title>Somnia — Files</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -169,7 +169,7 @@ BROWSER_HTML = r"""<!DOCTYPE html>
 <body>
 
 <div class="header">
-  <h1><span>★</span> Constellation Files</h1>
+  <h1><span>★</span> Somnia Files</h1>
   <a href="/logout" class="logout">Sign out</a>
 </div>
 
