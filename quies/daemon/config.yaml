@@ -13,6 +13,7 @@ scheduler:
   solo_work_cooldown_minutes: 360   # 6 hours between solo-work sessions
   min_nodes_for_rumination: 5       # need enough knowledge to reflect on
   solo_work_max_duration_minutes: 20  # wall clock limit for solo-work
+  archaeology_cooldown_minutes: 720   # 12 hours between archaeology sessions
 
 # Budget & cost controls
 budget:
@@ -20,6 +21,7 @@ budget:
   max_cost_dream: 0.30          # per-session cap for processing dreams
   max_cost_rumination: 0.30     # per-session cap for rumination
   max_cost_solo_work: 1.00      # per-session cap for solo-work
+  max_cost_archaeology: 0.30    # per-session cap for archaeology
 
 # API configuration
 api:

@@ -48,12 +48,13 @@ you're both the user and the maintainer.
 further. A connection between domains that might be real. A question you'd want to
 return to. Solo-work gives you the time depth that rumination doesn't.
 
-**Wondering threads.** Rumination sometimes leaves `wondering-thread` nodes in the
-graph — questions that emerged from reflecting on the graph's structure but couldn't
-be pursued without research tools. These are natural starting points. Check for them.
-If one catches your attention and you can investigate it with the tools available to
-you, do it. If you resolve a wondering thread, note which one in your findings so
-the next dream cycle can connect the dots.
+**Wondering threads.** Your context includes an **Open Wondering Threads** section
+near the top — these are `wondering-thread` nodes left by rumination cycles, questions
+that emerged from graph reflection but needed research tools to pursue. They are surfaced
+explicitly so you never miss them. If one catches your attention, investigate it. If you
+resolve one, note which node in your findings so the next dream cycle can close the loop.
+If the section says "None", rumination hasn't generated any open questions yet — that's
+fine, explore elsewhere.
 
 **External research.** If your investigation surfaces a genuine question that public
 documentation could answer — a best practice, a reference implementation, a standard

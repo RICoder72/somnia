@@ -13,9 +13,9 @@ Tools:
 """
 
 import json
-import json
 import logging
 import requests
+from datetime import datetime, timezone
 from fastmcp import FastMCP
 
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +56,11 @@ def _record_activity(activity_type: str, metadata: dict = None):
         pass  # Activity recording is best-effort, don't break tool calls
 
 
+def _server_timestamp() -> str:
+    """Return current server time as a compact ISO 8601 string with local offset."""
+    return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
 # =============================================================================
 # MCP TOOLS
 # =============================================================================
@@ -91,7 +96,7 @@ def somnia_remember(
     if "error" in result:
         return f"Failed to save: {result['error']}"
 
-    return f"Noted: {content[:80]}{'...' if len(content) > 80 else ''}"
+    return f"[{_server_timestamp()}] Noted: {content[:80]}{'...' if len(content) > 80 else ''}"
 
 
 @mcp.tool()
@@ -124,7 +129,7 @@ def somnia_recall(
     stm_count = result.get("stm_count", 0)
     ltm_count = result.get("ltm_count", 0)
     sltm_count = result.get("sltm_count", 0)
-    lines = [f"Found {len(nodes)} memory/memories for '{query}' ({stm_count} recent, {ltm_count} long-term, {sltm_count} faded):\n"]
+    lines = [f"[{_server_timestamp()}] Found {len(nodes)} memory/memories for '{query}' ({stm_count} recent, {ltm_count} long-term, {sltm_count} faded):\n"]
     for node in nodes:
         memory_layer = node.get("memory_layer_result", node.get("memory_layer", "ltm"))
         content = node.get("content", "")
@@ -243,6 +248,7 @@ def somnia_session() -> str:
     system_health = result.get("system_health", {})
 
     lines = ["Somnia Session Dashboard"]
+    lines.append(f"  Server time: {_server_timestamp()}")
     lines.append(f"  Graph: {graph.get('nodes', 0)} nodes, {graph.get('edges', 0)} edges, {graph.get('inbox', 0)} inbox")
     if dreams_since > 0:
         lines.append(f"  Dreams since last conversation: {dreams_since}")

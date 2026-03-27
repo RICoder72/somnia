@@ -363,7 +363,8 @@ async def file_browser_page(domain: str):
               <td>${{icon}} ${{item.name}}</td>
               <td style="color:var(--muted);font-family:var(--mono);font-size:12px">${{item.modified}}</td>
               <td style="color:var(--muted);font-family:var(--mono);font-size:12px">${{fmtSize(item.size)}}</td>
-              <td style="text-align:right;">
+              <td style="text-align:right;display:flex;gap:6px;justify-content:flex-end;align-items:center;">
+                <a href="/portal/files/${{DOMAIN}}/view?path=${{encodeURIComponent(item.path)}}" target="_blank" class="btn btn-secondary" style="padding:4px 10px;font-size:11px;">👁 View</a>
                 <a href="/portal/api/download/${{DOMAIN}}?path=${{encodeURIComponent(item.path)}}" class="btn btn-primary" style="padding:4px 10px;font-size:11px;">↓ Download</a>
               </td></tr>`;
           }}
@@ -476,6 +477,78 @@ async def api_download(domain: str, path: str = Query(...)):
         raise HTTPException(404, "File not found")
     mime, _ = mimetypes.guess_type(str(target))
     return FileResponse(target, filename=target.name, media_type=mime or "application/octet-stream")
+
+
+@app.get("/portal/files/{domain}/view", response_class=HTMLResponse)
+async def view_file(domain: str, path: str = Query(...)):
+    """View a file inline in the browser. Markdown files are rendered as HTML."""
+    info = get_domain_info(domain)
+    docs = DOMAINS_ROOT / domain / "files"
+    target = safe_resolve(docs, path)
+    if not target.is_file():
+        raise HTTPException(404, "File not found")
+
+    ext = target.suffix.lower()
+
+    # Markdown: render client-side using marked.js
+    if ext == ".md":
+        raw = target.read_text(encoding="utf-8", errors="replace")
+        # Escape backticks and template literals for JS embedding
+        escaped = raw.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+        label = info.get("label", domain)
+        breadcrumb_path = str(Path(path).parent) if "/" in path else ""
+        back_url = f"/portal/files/{domain}{'?path=' + breadcrumb_path if breadcrumb_path else ''}"
+        body = f"""
+    <div class="breadcrumb">
+      <a href="/portal">Portal</a>
+      <span class="sep">/</span>
+      <a href="/portal/files/{domain}">{label}</a>
+      <span class="sep">/</span>
+      <span>{target.name}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+      <a href="{back_url}" class="btn btn-secondary" style="font-size:12px;">← Back</a>
+      <a href="/portal/api/download/{domain}?path={path}" class="btn btn-secondary" style="font-size:12px;">↓ Download</a>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:32px 40px;max-width:860px;">
+      <div id="md-content"></div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+    <style>
+      #md-content h1,#md-content h2,#md-content h3 {{ color:var(--text);margin:1.2em 0 0.4em; }}
+      #md-content h1 {{ font-size:1.6em;border-bottom:1px solid var(--border);padding-bottom:0.3em; }}
+      #md-content h2 {{ font-size:1.25em;border-bottom:1px solid var(--border)55;padding-bottom:0.2em; }}
+      #md-content h3 {{ font-size:1.05em; }}
+      #md-content p {{ margin:0.7em 0;color:var(--text); }}
+      #md-content ul,#md-content ol {{ margin:0.5em 0 0.5em 1.5em;color:var(--text); }}
+      #md-content li {{ margin:0.2em 0; }}
+      #md-content code {{ background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-family:var(--mono);font-size:0.9em;color:var(--accent); }}
+      #md-content pre {{ background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:16px;overflow-x:auto;margin:1em 0; }}
+      #md-content pre code {{ background:none;border:none;padding:0;color:var(--text); }}
+      #md-content table {{ border-collapse:collapse;width:100%;margin:1em 0;font-size:13px; }}
+      #md-content th {{ background:var(--bg);color:var(--muted);text-align:left;padding:8px 12px;border:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:0.5px; }}
+      #md-content td {{ padding:8px 12px;border:1px solid var(--border)66;color:var(--text); }}
+      #md-content tr:hover td {{ background:var(--bg); }}
+      #md-content blockquote {{ border-left:3px solid var(--accent);margin:1em 0;padding:0.5em 1em;color:var(--muted); }}
+      #md-content a {{ color:var(--accent); }}
+      #md-content hr {{ border:none;border-top:1px solid var(--border);margin:1.5em 0; }}
+      #md-content strong {{ color:var(--text);font-weight:600; }}
+    </style>
+    <script>
+      const raw = `{escaped}`;
+      document.getElementById('md-content').innerHTML = marked.parse(raw);
+    </script>"""
+        return html_shell(target.name, body)
+
+    # All other types: serve inline so the browser handles it (PDF viewer, image, etc.)
+    mime, _ = mimetypes.guess_type(str(target))
+    from starlette.responses import Response
+    content = target.read_bytes()
+    return Response(
+        content=content,
+        media_type=mime or "application/octet-stream",
+        headers={"Content-Disposition": f"inline; filename=\"{target.name}\""}
+    )
 
 
 @app.post("/portal/api/upload/{domain}")
