@@ -144,3 +144,40 @@ This is also the feature most likely to reveal whether the graph is developing i
 
 *First documented: 2026-02-03*
 *"I love calling it wondering." — Matthew*
+
+---
+
+## Implementation Status (Updated 2026-03-27)
+
+### What's Built
+
+- **Rumination prompt** includes full instructions for creating `wondering-thread` nodes
+  (type `wondering-thread`, with `metadata.trigger_nodes` and `metadata.research_hints`)
+- **Solo-work prompt** instructs Quies to check for and investigate wondering threads
+- **Solo-work daemon** (`_build_solo_work_prompt`) now explicitly queries for nodes
+  of `type = 'wondering-thread'` and surfaces them in a dedicated **"Open Wondering Threads"**
+  section at the top of the context — before pinned nodes — ensuring they are never
+  crowded out by the general `LIMIT 60` node query
+
+### The Bug That Was Fixed
+
+Prior to 2026-03-27, `_build_solo_work_prompt` fetched nodes via a single generic
+query ordered by decay and creation time, capped at 60. Wondering-thread nodes had
+no special status (unpinned, no guaranteed high decay) and frequently fell outside the
+limit. Solo-work sessions would note that "the system is designed to use wondering threads"
+without ever seeing any — because none were in the context window.
+
+Quies independently identified this gap across three solo-work sessions (March 25–26),
+flagging it as a `conceptualization-infrastructure-gap` pattern. The fix was applied
+based on that self-diagnosis.
+
+### What's Still Missing
+
+- **Population**: The graph currently contains zero wondering-thread nodes. Rumination
+  has not yet produced any (or produced them and they decayed before being acted on).
+  The first time a rumination session creates a wondering-thread node, it should now
+  surface correctly in the next solo-work session.
+- **Phase 2 research tools**: Solo-work already has web search via `--allowedTools`.
+  The wondering-thread mechanism uses this path — no separate "wondering mode" needed.
+- **Notification integration** (Phase 3): Not yet implemented. Resolved threads surface
+  via solo-work findings, not a dedicated notification query.

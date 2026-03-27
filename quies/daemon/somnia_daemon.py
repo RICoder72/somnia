@@ -659,6 +659,45 @@ def should_solo_work():
     return True, "Ready for solo-work"
 
 
+def should_archaeologize():
+    """Decide whether to run an archaeology session (SLTM review).
+
+    Lowest-priority phase. Runs only when processing/rumination/solo-work are
+    all in cooldown and the graph has meaningful SLTM content to review.
+    """
+    sched = CONFIG.get('scheduler', {})
+    budget = CONFIG.get('budget', {})
+    stats = get_graph_stats()
+
+    sltm_count = stats.get('sltm_count', 0)
+    if sltm_count < 3:
+        return False, f"Only {sltm_count} SLTM nodes, not enough for archaeology"
+
+    if stats['inbox_pending'] > 0:
+        return False, "STM has items — should process first"
+
+    ok, reason = check_global_cooldown()
+    if not ok:
+        return False, reason
+
+    own_cooldown_min = sched.get('archaeology_cooldown_minutes', 720)
+    last_arch = get_last_phase_end('[archaeologize]')
+    if last_arch:
+        now = datetime.now(last_arch.tzinfo) if last_arch.tzinfo else datetime.now()
+        elapsed = now - last_arch
+        if elapsed < timedelta(minutes=own_cooldown_min):
+            remaining = timedelta(minutes=own_cooldown_min) - elapsed
+            return False, f"Archaeology cooldown active, {remaining.seconds // 60}m remaining"
+
+    daily_cost = get_daily_cost()
+    max_daily = budget.get('max_cost_per_day', 2.00)
+    max_session = budget.get('max_cost_archaeology', 0.30)
+    if daily_cost + max_session > max_daily:
+        return False, f"Budget: ${daily_cost:.2f} spent today, archaeology could exceed ${max_daily:.2f} cap"
+
+    return True, f"Ready for archaeology ({sltm_count} SLTM nodes available)"
+
+
 def get_activity_summary():
     """Get a summary of recent activity for status reporting."""
     row = execute(
@@ -1235,7 +1274,33 @@ def run_consolidation(dry_run=False, mode='process'):
             except Exception as e:
                 logger.warning(f"Could not write diagnostic dump: {e}")
 
-        if mode == 'solo_work':
+        if mode == 'archaeologize':
+            # Archaeology produces STM observations for resurfaced SLTM nodes
+            if dream_ops and 'resurfaced' in dream_ops:
+                arch_results = _apply_archaeology_results(dream_ops, dream_id)
+                summary = dream_ops.get('summary', '')
+                reflections = dream_ops.get('notes', '')
+                op_results = {
+                    "nodes_created": arch_results['stm_nodes_created'],
+                    "edges_created": [],
+                    "edges_reinforced": [],
+                    "inbox_processed": [],
+                    "resurfaced_count": arch_results['resurfaced_count'],
+                    "pin_candidates": arch_results['pin_candidates'],
+                    "errors": arch_results['errors']
+                }
+            else:
+                log_event('warning', 'archaeology', 'No parseable results JSON in output',
+                          dream_id=dream_id)
+                op_results = {
+                    "nodes_created": [], "edges_created": [],
+                    "edges_reinforced": [], "inbox_processed": [],
+                    "resurfaced_count": 0, "errors": ["No parseable results JSON"]
+                }
+                summary = ''
+                reflections = ''
+
+        elif mode == 'solo_work':
             # Solo-work produces findings, not graph operations
             if dream_ops and 'findings' in dream_ops:
                 solo_results = _apply_solo_work_results(dream_ops, dream_id)
@@ -1618,6 +1683,14 @@ def _build_solo_work_prompt(graph_stats):
         "FROM nodes ORDER BY pinned DESC, decay_state ASC, created_at DESC LIMIT 60",
         fetch='all') or []
 
+    # Explicitly fetch wondering-thread nodes from both LTM and SLTM so they
+    # are never crowded out by the general LIMIT 60 query above.
+    wondering_threads = execute(
+        "SELECT id, type, content, metadata, decay_state, created_at "
+        "FROM nodes WHERE type = 'wondering-thread' "
+        "ORDER BY created_at DESC LIMIT 20",
+        fetch='all') or []
+
     edges = execute(
         "SELECT source_id, target_id, type, weight FROM edges ORDER BY weight DESC LIMIT 100",
         fetch='all') or []
@@ -1638,6 +1711,36 @@ def _build_solo_work_prompt(graph_stats):
 **Daily cost so far**: ${daily_cost:.2f}
 
 """
+
+    # Surface wondering threads prominently — these are natural solo-work starting points
+    if wondering_threads:
+        context += f"## Open Wondering Threads ({len(wondering_threads)} found — strong starting points)\n\n"
+        context += ("These questions were left by rumination cycles. "
+                    "They need research tools you have. Investigate one if it catches your attention.\n\n")
+        for wt in wondering_threads:
+            meta = wt.get('metadata') or {}
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+            hints = meta.get('research_hints', '')
+            triggers = meta.get('trigger_nodes', [])
+            created = wt.get('created_at')
+            if isinstance(created, datetime):
+                created = created.strftime('%Y-%m-%d')
+            elif created:
+                created = str(created)[:10]
+            context += f"### 🧵 {wt['id']} [decay={wt['decay_state']:.2f}, created={created}]\n"
+            context += f"{wt['content']}\n"
+            if triggers:
+                context += f"Triggered by: {', '.join(triggers)}\n"
+            if hints:
+                context += f"Research hints: {hints}\n"
+            context += "\n"
+    else:
+        context += "## Open Wondering Threads\n\nNone in the graph — rumination hasn't left any open questions yet.\n\n"
+
     # Show pinned nodes with full detail
     pinned_nodes = [n for n in nodes if n.get('pinned')]
     unpinned_nodes = [n for n in nodes if not n.get('pinned')]
@@ -1774,6 +1877,92 @@ def _apply_solo_work_results(findings_json, dream_id):
 
 
 
+
+
+def _build_archaeology_prompt(graph_stats):
+    """Build the prompt for an archaeology (SLTM review) session."""
+    try:
+        system_prompt = load_prompt("archaeology")
+    except FileNotFoundError:
+        system_prompt = "Review SLTM nodes. Identify what deserves resurfacing. Output JSON."
+
+    sltm_nodes = execute(
+        "SELECT id, type, content, decay_state, reinforcement_count, created_at, last_accessed "
+        "FROM nodes "
+        "WHERE memory_layer = 'sltm' AND pinned = FALSE "
+        "ORDER BY COALESCE(last_accessed, created_at) ASC, decay_state ASC "
+        "LIMIT 25",
+        fetch='all') or []
+
+    sltm_count_total = graph_stats.get('sltm_count', len(sltm_nodes))
+
+    context = f"""## Graph State
+
+**LTM nodes**: {graph_stats['node_count']}
+**SLTM nodes (total)**: {sltm_count_total}
+**Showing**: {len(sltm_nodes)} most inert (oldest / never accessed)
+
+## SLTM Sample
+
+"""
+    for node in sltm_nodes:
+        created = node.get('created_at', '?')
+        if hasattr(created, 'isoformat'):
+            created = created.strftime('%Y-%m-%d')
+        last = node.get('last_accessed')
+        last_str = last.strftime('%Y-%m-%d') if last else 'never'
+        parts = [
+            f"### {node['id']} ({node['type']})",
+            f"**Created**: {created} | **Last accessed**: {last_str} | "
+            f"**Decay**: {node['decay_state']:.3f} | **Reinforced**: {node['reinforcement_count']}x",
+            "",
+            node['content'],
+            "",
+            "---",
+            "",
+        ]
+        context += "\n".join(parts) + "\n"
+
+    return system_prompt + "\n\n" + context
+
+
+def _apply_archaeology_results(results_json, dream_id):
+    """Apply archaeology results: create STM observations for resurfaced SLTM nodes."""
+    results = {
+        "stm_nodes_created": [],
+        "resurfaced_count": 0,
+        "pin_candidates": [],
+        "errors": []
+    }
+
+    if not results_json:
+        return results
+
+    resurfaced = results_json.get('resurfaced', [])
+    results['resurfaced_count'] = len(resurfaced)
+
+    for item in resurfaced:
+        node_id = item.get('node_id', '')
+        stm_obs = item.get('stm_observation', '')
+        is_pin_candidate = item.get('pin_candidate', False)
+
+        if not stm_obs:
+            continue
+
+        if is_pin_candidate:
+            stm_obs = f"[pin-candidate] {stm_obs}"
+            results['pin_candidates'].append(node_id)
+
+        stm_id = str(uuid.uuid4())
+        try:
+            execute(
+                "INSERT INTO stm_nodes (id, content, domain, source) VALUES (%s, %s, %s, %s)",
+                (stm_id, stm_obs, 'archaeology', f"archaeology:{dream_id}:{node_id}"))
+            results['stm_nodes_created'].append(stm_id)
+        except Exception as e:
+            results['errors'].append(f"STM insert ({node_id}): {str(e)}")
+
+    return results
 
 
 # ============================================================================
@@ -1916,10 +2105,32 @@ def dream_scheduler():
                             'duration_seconds': result.get('duration_seconds'),
                             'summary': result.get('summary', '')[:200]
                         }, dream_id=result.get('dream_id'))
+                # Phase 4: Archaeology — SLTM review, lowest priority of all
+                can_arch, arch_reason = should_archaeologize()
+                if can_arch:
+                    logger.info(f"Scheduler: starting archaeology ({arch_reason})")
+                    log_event('info', 'scheduler', 'Starting archaeology', {'reason': arch_reason})
+                    result = run_consolidation(mode='archaeologize')
+                    if 'error' in result:
+                        logger.error(f"Scheduler: archaeology failed: {result['error']}")
+                        log_event('error', 'archaeology', f"Archaeology failed: {result['error']}",
+                                  {'dream_id': result.get('dream_id')}, dream_id=result.get('dream_id'))
+                    else:
+                        resurfaced = result.get('operations', {}).get('resurfaced_count', 0)
+                        pins = result.get('operations', {}).get('pin_candidates', [])
+                        logger.info(
+                            f"Scheduler: archaeology complete — "
+                            f"{resurfaced} resurfaced, {len(pins)} pin candidates")
+                        log_event('info', 'archaeology', 'Archaeology complete', {
+                            'resurfaced_count': resurfaced,
+                            'pin_candidates': pins,
+                            'duration_seconds': result.get('duration_seconds'),
+                            'summary': result.get('summary', '')[:200]
+                        }, dream_id=result.get('dream_id'))
                 else:
-                    logger.debug(f"Scheduler: not dreaming ({reason}), "
-                                 f"not ruminating ({rum_reason}), "
-                                 f"not solo-working ({solo_reason})")
+                    logger.debug(f"Scheduler: all phases idle — dreaming={reason}, "
+                                 f"ruminating={rum_reason}, solo={solo_reason}, "
+                                 f"archaeology={arch_reason})")
 
         except Exception as e:
             logger.error(f"Scheduler error: {e}", exc_info=True)
@@ -2457,6 +2668,7 @@ def _analytics_data(days):
                         WHEN summary LIKE '[process]%%' THEN 'processing'
                         WHEN summary LIKE '[ruminate]%%' THEN 'rumination'
                         WHEN summary LIKE '[solo_work]%%' THEN 'solo-work'
+                        WHEN summary LIKE '[archaeologize]%%' THEN 'archaeology'
                         ELSE 'unknown'
                     END as phase,
                     COUNT(*) as sessions,
