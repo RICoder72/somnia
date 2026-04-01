@@ -42,6 +42,9 @@ services:
     volumes:
       - ./quies:/app:ro
       - quies-data:/data/somnia
+      # somnia_provision needs to write portal-manifest.json and create document folders
+      - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs
+      - ${SOMNIA_DOCUMENTS_DIR:-./documents}:/data/documents
     environment:
       SOMNIA_PORT: "8010"
       SOMNIA_MCP_PORT: "8011"
@@ -136,6 +139,11 @@ services:
     volumes:
       - ${SOMNIA_CONFIG_DIR:-./config}:/data/config:ro
       - ${SOMNIA_DOMAINS_DIR:-./domains}:/data/domains:ro
+      # Portal file browser serves from /data/documents/{domain}/
+      # Portal reports serve from /data/documents/{domain}/reports/
+      - ${SOMNIA_DOCUMENTS_DIR:-./documents}:/data/documents
+      # Portal reads portal-manifest.json from /data/outputs/
+      - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs:ro
     environment:
       PORTAL_DB_URL: "postgresql://${POSTGRES_USER:-somnia}:${POSTGRES_PASSWORD}@somnia-postgres:5432/somnia"
     networks:
