@@ -175,6 +175,27 @@ services:
       retries: 3
       start_period: 5s
 
+  # watchdog — optional container health monitor (separate repo: ../watchdog)
+  # Monitors service health and restarts containers that fail health checks.
+  # Clone https://github.com/RICoder72/watchdog alongside this repo to enable.
+  #
+  # watchdog:
+  #   build:
+  #     context: ../watchdog
+  #     dockerfile: Dockerfile
+  #   container_name: somnia-watchdog
+  #   restart: unless-stopped
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #   environment:
+  #     CHECK_INTERVAL: "30"
+  #     FAIL_THRESHOLD: "3"
+  #     RESTART_COOLDOWN: "60"
+  #   networks:
+  #     - mcp-net
+  #   depends_on:
+  #     - router
+
 volumes:
   pgdata:
   quies-data:
@@ -182,20 +203,3 @@ volumes:
 networks:
   mcp-net:
     external: true
-
-  watchdog:
-    build:
-      context: ../watchdog
-      dockerfile: Dockerfile
-    container_name: somnia-watchdog
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    environment:
-      CHECK_INTERVAL: "30"
-      FAIL_THRESHOLD: "3"
-      RESTART_COOLDOWN: "60"
-    networks:
-      - mcp-net
-    depends_on:
-      - router
