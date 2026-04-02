@@ -33,6 +33,7 @@ import json
 import mimetypes
 import os
 import asyncpg
+import httpx
 
 app = FastAPI(title="Somnia Portal")
 
@@ -57,6 +58,9 @@ ALLOWED_EXTENSIONS = {
     ".pptx", ".ppt", ".png", ".jpg", ".jpeg", ".gif",
     ".csv", ".html", ".json", ".zip",
 }
+
+# Internal Quies Flask API (reachable on mcp-net)
+QUIES_API = os.environ.get("QUIES_API_URL", "http://quies:8010")
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +287,41 @@ STYLES = """
     }
     .health-stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; font-family: var(--mono); }
     .health-stat-value { font-size: 20px; font-weight: 700; font-family: var(--mono); margin-top: 2px; }
+    .health-stat-clickable { cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+    .health-stat-clickable:hover { border-color: #f85149; background: #f8514908; }
+    .health-stat-clickable .health-stat-label { color: #f85149aa; }
+    /* Error log modal */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: #010409cc; z-index: 2000;
+      align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius); width: 90%; max-width: 780px;
+      max-height: 80vh; display: flex; flex-direction: column;
+      box-shadow: 0 8px 32px #00000066;
+    }
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 20px; border-bottom: 1px solid var(--border);
+    }
+    .modal-title { font-size: 14px; font-weight: 600; color: var(--danger); }
+    .modal-close {
+      background: none; border: none; color: var(--muted);
+      font-size: 20px; cursor: pointer; padding: 0 4px; line-height: 1;
+    }
+    .modal-close:hover { color: var(--text); }
+    .modal-body { overflow-y: auto; padding: 16px 20px; flex: 1; }
+    .log-entry {
+      border-bottom: 1px solid #30363d55; padding: 10px 0;
+      font-size: 12px; font-family: var(--mono);
+    }
+    .log-entry:last-child { border-bottom: none; }
+    .log-ts { color: var(--muted); margin-bottom: 3px; font-size: 11px; }
+    .log-source { display: inline-block; background: #f8514922; color: #f85149; border-radius: 3px; padding: 1px 6px; font-size: 10px; margin-right: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .log-msg { color: var(--text); margin-top: 3px; word-break: break-word; line-height: 1.5; }
     /* Solo-work feed */
     .findings-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
     .finding-row {
@@ -332,6 +371,18 @@ def html_shell(title: str, body: str, extra_head: str = "") -> str:
 # ---------------------------------------------------------------------------
 # Landing page — manifest-driven
 # ---------------------------------------------------------------------------
+
+@app.get("/portal/logs", response_class=JSONResponse)
+async def portal_logs(level: str = "error", limit: int = 30):
+    """Proxy recent system logs from Quies for dashboard drill-down."""
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(f"{QUIES_API}/logs", params={"level": level, "limit": limit})
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        return {"error": str(e), "logs": [], "count": 0}
+
 
 @app.get("/portal", response_class=HTMLResponse)
 @app.get("/portal/", response_class=HTMLResponse)
@@ -411,6 +462,20 @@ async def landing():
     daily_cap = health.get("daily_cap_usd", 2.0)
     cost_pct = int((daily_cost / daily_cap * 100) if daily_cap else 0)
 
+    # Errors stat: clickable when > 0, opens log drill-down modal
+    if errors > 0:
+        err_stat_html = f"""
+        <div class="health-stat health-stat-clickable" onclick="openErrorModal()" title="Click to view error log">
+          <div class="health-stat-label">Errors 24h ↗</div>
+          <div class="health-stat-value" style="color:{err_color}">{errors}</div>
+        </div>"""
+    else:
+        err_stat_html = f"""
+        <div class="health-stat">
+          <div class="health-stat-label">Errors 24h</div>
+          <div class="health-stat-value" style="color:{err_color}">{errors}</div>
+        </div>"""
+
     health_html = f"""
     <div class="health-bar">
       {health_stat("Nodes", health.get("node_count", "—"))}
@@ -418,7 +483,7 @@ async def landing():
       {health_stat("Pinned", health.get("pinned_count", "—"))}
       {health_stat("Inbox", health.get("inbox_depth", "—"))}
       {health_stat("Dreams / 7d", health.get("dreams_last_7d", "—"))}
-      {health_stat("Errors 24h", errors, err_color)}
+      {err_stat_html}
       {health_stat("Daily cost", f'${daily_cost:.3f} ({cost_pct}%)')}
     </div>"""
 
@@ -482,6 +547,71 @@ async def landing():
     <div class="findings-list">
       {findings_html}
     </div>
+
+    <!-- Error log modal -->
+    <div class="modal-overlay" id="error-modal" onclick="if(event.target===this)closeErrorModal()">
+      <div class="modal-box">
+        <div class="modal-header">
+          <span class="modal-title">⚠ Error Log — Last 24 Hours</span>
+          <button class="modal-close" onclick="closeErrorModal()">×</button>
+        </div>
+        <div class="modal-body" id="error-modal-body">
+          <p style="color:var(--muted);font-size:13px">Loading…</p>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    async function openErrorModal() {{
+      document.getElementById('error-modal').classList.add('open');
+      const body = document.getElementById('error-modal-body');
+      body.innerHTML = '<p style="color:var(--muted);font-size:13px;font-family:var(--mono)">Fetching logs…</p>';
+      try {{
+        const r = await fetch('/portal/logs?level=error&limit=30');
+        const data = await r.json();
+        if (data.error) {{
+          body.innerHTML = '<p style="color:var(--danger);font-size:12px;font-family:var(--mono)">Error: ' + data.error + '</p>';
+          return;
+        }}
+        const logs = data.logs || [];
+        if (!logs.length) {{
+          body.innerHTML = '<p style="color:var(--muted);font-size:13px">No errors found.</p>';
+          return;
+        }}
+        const summary = data.summary || {{}};
+        let html = '<div style="font-size:11px;color:var(--muted);margin-bottom:14px;font-family:var(--mono)">';
+        html += logs.length + ' most recent errors';
+        if (summary.error) html += ' &nbsp;·&nbsp; ' + summary.error + ' total in log';
+        html += '</div>';
+        for (const e of logs) {{
+          const ts = e.timestamp ? e.timestamp.replace('T',' ').slice(0,19) + ' UTC' : '—';
+          const src = e.source || '?';
+          const msg = e.message || '';
+          let meta = '';
+          if (e.metadata) {{
+            try {{
+              const m = typeof e.metadata === 'string' ? JSON.parse(e.metadata) : e.metadata;
+              const parts = Object.entries(m).filter(([k]) => k !== 'dream_id').map(([k,v]) => k + '=' + JSON.stringify(v));
+              if (parts.length) meta = '<div style="color:#8b949e;margin-top:3px;font-size:10px">' + parts.join('  ') + '</div>';
+            }} catch(ex) {{}}
+          }}
+          html += '<div class="log-entry">';
+          html += '<div class="log-ts">' + ts + '</div>';
+          html += '<div><span class="log-source">' + src + '</span></div>';
+          html += '<div class="log-msg">' + msg + '</div>';
+          html += meta;
+          html += '</div>';
+        }}
+        body.innerHTML = html;
+      }} catch(ex) {{
+        body.innerHTML = '<p style="color:var(--danger);font-size:12px;font-family:var(--mono)">Failed to load: ' + ex.message + '</p>';
+      }}
+    }}
+    function closeErrorModal() {{
+      document.getElementById('error-modal').classList.remove('open');
+    }}
+    document.addEventListener('keydown', e => {{ if (e.key === 'Escape') closeErrorModal(); }});
+    </script>
     """
 
     return html_shell("Somnia Portal", body)
