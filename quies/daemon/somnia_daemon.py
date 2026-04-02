@@ -1184,18 +1184,23 @@ def run_consolidation(dry_run=False, mode='process'):
     try:
         max_turns = "20" if mode == 'solo_work' else "10"
         timeout_seconds = 1200 if mode == 'solo_work' else 600
-        cmd = ["claude", "-p", full_prompt, "--output-format", "json",
-             "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
-             "--max-turns", max_turns]
+        # Pass prompt via stdin (input=) rather than as a -p argv argument.
+        # The graph grows over time; large rumination prompts (149+ nodes, 800+ edges)
+        # exceed Linux ARG_MAX when passed on the command line, causing E2BIG / OSError 7.
+        # subprocess.run(input=...) pipes through stdin — no argv size limit.
+        # Claude Code detects non-TTY stdin and runs non-interactively.
+        # Note: Do NOT use --print with --output-format json — causes empty result field
+        # when extended thinking is active (confirmed via cli-test debugging).
+        cmd = ["claude", "--output-format", "json",
+               "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
+               "--max-turns", max_turns]
         # Enable web research for solo-work sessions
-        # Note: --allowedTools with -p (non-interactive) auto-approves listed tools.
-        # Do NOT use --print with --output-format json — it causes the result field
-        # to be empty when extended thinking is active (confirmed via cli-test debugging).
+        # --allowedTools in non-interactive mode auto-approves listed tools.
         if mode == 'solo_work':
             cmd.extend(["--allowedTools", "WebSearch", "WebFetch",
                          "Read", "Grep", "Glob", "Bash", "Edit"])
         result = subprocess.run(
-            cmd,
+            cmd, input=full_prompt,
             capture_output=True, text=True, timeout=timeout_seconds, env=env
         )
 
@@ -1243,7 +1248,7 @@ def run_consolidation(dry_run=False, mode='process'):
                       dream_id=dream_id)
             try:
                 retry_result = subprocess.run(
-                    cmd, capture_output=True, text=True,
+                    cmd, input=full_prompt, capture_output=True, text=True,
                     timeout=timeout_seconds, env=env)
                 if retry_result.returncode == 0:
                     try:
