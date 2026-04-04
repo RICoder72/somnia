@@ -2459,6 +2459,8 @@ def index():
             "PATCH /nodes/<id>": "Update node",
                                                 "POST /edges": "Create edge",
             "POST /consolidate": "Trigger dream",
+            "POST /harvest/reset": "Reset harvest cooldown and processed UUID list",
+            "POST /harvest/run": "Trigger harvest immediately (bypasses cooldown)",
             "POST /inbox": "Add to STM",
             "GET /inbox": "List STM",
             "GET /dreams": "List dreams",
@@ -3303,6 +3305,56 @@ def debug_cli_test():
     results['test_mode'] = test_mode
 
     return jsonify(results)
+
+
+
+@app.route("/harvest/reset", methods=["POST"])
+def harvest_reset():
+    """Reset harvest state — clears processed_uuids and last_harvest_at.
+    Allows the next scheduler cycle to re-scan all conversations.
+    Optionally POST JSON: {"clear_uuids": false} to only reset the cooldown.
+    """
+    try:
+        from conversation_harvester import load_harvest_state, save_harvest_state
+        body = request.get_json(silent=True) or {}
+        clear_uuids = body.get("clear_uuids", True)
+
+        state = load_harvest_state()
+        cleared = []
+
+        state["last_harvest_at"] = None
+        cleared.append("cooldown (last_harvest_at)")
+
+        if clear_uuids:
+            count = len(state.get("processed_uuids", []))
+            state["processed_uuids"] = []
+            cleared.append(f"processed_uuids ({count} entries)")
+
+        state["last_error"] = None
+        save_harvest_state(state)
+
+        return jsonify({"status": "ok", "cleared": cleared})
+    except Exception as e:
+        app.logger.error(f"harvest_reset: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/harvest/run", methods=["POST"])
+def harvest_run():
+    """Trigger a harvest immediately, bypassing the cooldown check.
+    Runs synchronously — may take 30-120 seconds for large backlogs.
+    Returns harvest result dict.
+    """
+    try:
+        from conversation_harvester import run_harvest
+        api_key = get_api_key()
+        if not api_key:
+            return jsonify({"error": "No API key available — check 1Password"}), 503
+        result = run_harvest(api_key)
+        return jsonify(result)
+    except Exception as e:
+        app.logger.error(f"harvest_run: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/search", methods=["GET"])
