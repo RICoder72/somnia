@@ -1430,6 +1430,17 @@ def run_consolidation(dry_run=False, mode='process'):
         # Refresh portal manifest after every successful dream cycle
         _refresh_portal_manifest(dream_id=dream_id)
 
+        # Update sticky notes with what this dream cycle did
+        try:
+            import sys as _sys
+            _daemon_path = str(APP_DIR / "daemon")
+            if _daemon_path not in _sys.path:
+                _sys.path.insert(0, _daemon_path)
+            from sticky_notes import update_dream_focus
+            update_dream_focus(mode, summary[:400] if summary else "(no summary)")
+        except Exception as _sne:
+            logger.debug(f"sticky_notes update skipped: {_sne}")
+
         return {
             "dream_id": dream_id, "mode": mode,
             "started_at": started_at, "ended_at": ended_at,
@@ -2334,6 +2345,45 @@ def dream_scheduler():
                     logger.debug(f"Scheduler: all phases idle — dreaming={reason}, "
                                  f"ruminating={rum_reason}, solo={solo_reason}, "
                                  f"archaeology={arch_reason})")
+
+                # Phase 5: Conversation harvest — runs once daily
+                try:
+                    from conversation_harvester import should_harvest, run_harvest
+                    can_harv, harv_reason = should_harvest()
+                    if can_harv:
+                        logger.info(f"Scheduler: starting conversation harvest ({harv_reason})")
+                        log_event("info", "scheduler", "Starting conversation harvest",
+                                  {"reason": harv_reason})
+                        auth_type, token = get_claude_auth()
+                        api_key = token if auth_type == "api_key" else os.environ.get("ANTHROPIC_API_KEY")
+                        if not api_key:
+                            logger.warning("Harvester: no API key available, skipping")
+                        else:
+                            harv_result = run_harvest(api_key)
+                            status = harv_result.get("status", "unknown")
+                            if status in ("session_expired", "auth_error"):
+                                log_event("warning", "harvest",
+                                          f"Harvest skipped: {harv_result.get("error")}",
+                                          {"nudge": "Refresh Claude AI Session Key in 1Password"})
+                                logger.warning(f"Harvester: {harv_result.get("error")}")
+                            elif status == "error":
+                                log_event("error", "harvest",
+                                          f"Harvest failed: {harv_result.get("error")}")
+                            else:
+                                obs = harv_result.get("observations_added", 0)
+                                mined = harv_result.get("conversations_mined", 0)
+                                log_event("info", "harvest", "Conversation harvest complete", {
+                                    "conversations_mined": mined,
+                                    "observations_added": obs,
+                                    "conversations_scanned": harv_result.get("conversations_scanned", 0)
+                                })
+                                logger.info(
+                                    f"Scheduler: harvest complete — "
+                                    f"{mined} conversations mined, {obs} observations added")
+                except ImportError:
+                    pass
+                except Exception as e_harv:
+                    logger.error(f"Harvester phase error: {e_harv}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Scheduler error: {e}", exc_info=True)
