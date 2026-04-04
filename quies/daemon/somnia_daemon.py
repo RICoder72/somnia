@@ -123,6 +123,31 @@ def get_claude_auth():
         return (None, None)
 
 
+def get_api_key():
+    """Return the raw Anthropic API key regardless of OAuth preference.
+    Used by components that must call the Anthropic API directly
+    (e.g. conversation_harvester) rather than via Claude Code OAuth.
+    """
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return key
+    api_ref = CONFIG['api'].get('credentials_ref',
+                                 'op://Key Vault/Anthropic API/credential')
+    try:
+        result = subprocess.run(
+            ["op", "read", api_ref],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+        app.logger.warning(f"get_api_key: 1Password lookup failed: {result.stderr.strip()[:200]}")
+    except FileNotFoundError:
+        app.logger.warning("get_api_key: 1Password CLI not found")
+    except Exception as e:
+        app.logger.warning(f"get_api_key: {e}")
+    return None
+
+
 # ============================================================================
 # PROMPT & DATA HELPERS
 # ============================================================================
@@ -2354,8 +2379,7 @@ def dream_scheduler():
                         logger.info(f"Scheduler: starting conversation harvest ({harv_reason})")
                         log_event("info", "scheduler", "Starting conversation harvest",
                                   {"reason": harv_reason})
-                        auth_type, token = get_claude_auth()
-                        api_key = token if auth_type == "api_key" else os.environ.get("ANTHROPIC_API_KEY")
+                        api_key = get_api_key()
                         if not api_key:
                             logger.warning("Harvester: no API key available, skipping")
                         else:
