@@ -227,8 +227,12 @@ def mine_conversation(conv_text, anthropic_api_key):
         method="POST"
     )
 
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')[:500]
+        raise Exception(f"HTTP {e.code}: {body}") from e
 
     text = data["content"][0]["text"].strip()
     if text.startswith("```"):
