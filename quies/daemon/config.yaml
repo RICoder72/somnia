@@ -25,7 +25,7 @@ budget:
 
 # API configuration
 api:
-  credentials_ref: "op://Key Vault/Anthropic API/credential"
+  credentials_ref: "op://Key Vault/Somnia Harvester API Key/password"
   oauth_credentials_ref: "op://Key Vault/Claude Code OAuth/credential"
   model: "claude-sonnet-4-20250514"
   max_tokens: 8192
