@@ -93,6 +93,7 @@ def get_session_key():
     try:
         result = subprocess.run(
             ["op", "item", "get", "Claude AI Session Key",
+             "--vault", "Key Vault",
              "--fields", "password", "--format", "json"],
             capture_output=True, text=True, timeout=30
         )
