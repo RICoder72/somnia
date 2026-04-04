@@ -751,6 +751,20 @@ def somnia_session() -> str:
             lines.append(f"  📋 {f['filename']} ({f['modified'][:10]})")
         lines.append("")
 
+    # Sticky notes — written incrementally by Quies between sessions
+    try:
+        import sys as _sys, os as _os
+        daemon_path = _os.environ.get("SOMNIA_APP_DIR", "/app") + "/daemon"
+        if daemon_path not in _sys.path:
+            _sys.path.insert(0, daemon_path)
+        from sticky_notes import read_for_session
+        notes = read_for_session()
+        if notes:
+            lines.append(notes)
+            lines.append("")
+    except Exception:
+        pass  # sticky notes are optional — never break session on their absence
+
     return "\n".join(lines)
 
 
