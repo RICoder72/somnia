@@ -9,22 +9,42 @@ Phase 1: This module is infrastructure only.
          Wire in by calling run_cycle() from dream_scheduler once
          you're ready to migrate an activity type (Phase 2+).
 
-Activity types register themselves via @register_activity.
-Each handler receives a Job and a Budget, does one meaningful unit
-of work, and returns a JobResult with a cursor (for resumption),
-tokens consumed, and a completion flag.
+## Selection Model: Tier + D Score
 
-Priority scale (lower = higher priority):
-    PRIORITY_PROCESS_STM     = 10
-    PRIORITY_HARVEST_ACQUIRE = 30
-    PRIORITY_RUMINATE        = 50
-    PRIORITY_SOLO_WORK       = 70
-    PRIORITY_HARVEST_PROCESS = 80
+Each activity has two scheduling attributes:
 
-Usage (future dream_scheduler integration):
-    from work_queue import run_cycle, enqueue
-    enqueue('process_stm', priority=PRIORITY_PROCESS_STM)
-    run_cycle(budget_tokens=50000, budget_seconds=1200)
+  tier (int, unique, required)
+      Hard priority partition. Lower tier = higher precedence.
+      The scheduler finds the lowest tier among all eligible activities
+      and only considers activities in that tier for D competition.
+      Tiers must be unique across all registered activities.
+
+      Suggested assignments:
+          0  — process_stm       (obligatory inbox drain, always preempts)
+          10 — harvest_acquire   (timely fetch before backlog grows)
+          20 — ruminate          (post-interaction reinforcement)
+          20 — solo_work         (idle-time exploration) ← same tier, compete via D
+          30 — harvest_process   (background backlog drain)
+          40 — backfill_acquire  (one-shot seeding, lowest urgency)
+
+      Note: ruminate and solo_work intentionally share tier 20 — they
+      are natural competitors and should be selected by D score alone.
+
+  d_fn (callable, optional)
+      D ∈ [0.0, 1.0] — urgency score computed from live system state.
+      Evaluated fresh each cycle. Activities with D < D_MIN are excluded
+      even if they are the lowest-tier eligible activity.
+      If omitted, D defaults to 0.5 (always eligible above threshold).
+
+The net effect: tier gives you unambiguous preemption across activity
+classes; D handles nuanced competition within a tier. Cooldowns
+disappear as a concept — a satisfied activity has low D naturally.
+
+## Usage (future dream_scheduler integration)
+
+    from work_queue import run_cycle, enqueue, register_activity, TIER_*
+    register_activity('process_stm', handler=..., tier=TIER_PROCESS_STM, d_fn=d_process_stm)
+    run_cycle(budget_tokens=50_000, budget_seconds=1200)
 """
 
 from __future__ import annotations
@@ -32,6 +52,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -40,13 +61,18 @@ from db import execute
 
 logger = logging.getLogger(__name__)
 
-# ── Priority constants ─────────────────────────────────────────────────────
+# ── Tier constants (unique, lower = higher precedence) ─────────────────────
 
-PRIORITY_PROCESS_STM     = 10
-PRIORITY_HARVEST_ACQUIRE = 30
-PRIORITY_RUMINATE        = 50
-PRIORITY_SOLO_WORK       = 70
-PRIORITY_HARVEST_PROCESS = 80
+TIER_PROCESS_STM     = 0
+TIER_HARVEST_ACQUIRE = 10
+TIER_RUMINATE        = 20   # ruminate and solo_work share tier — D decides
+TIER_SOLO_WORK       = 20
+TIER_HARVEST_PROCESS = 30
+TIER_BACKFILL        = 40
+
+# ── Scheduler tuning ───────────────────────────────────────────────────────
+
+D_MIN = 0.05   # Activities with D below this are excluded regardless of tier
 
 
 # ── Data structures ────────────────────────────────────────────────────────
@@ -74,7 +100,7 @@ class JobResult:
     Returned by every activity handler.
 
     complete:    True if the job finished all work and should be marked complete.
-    cursor:      Resumption state to persist if paused (type-specific JSONB).
+    cursor:      Resumption state to persist if paused (type-specific dict).
     tokens_used: Tokens consumed in this unit of work.
     error:       Non-None if the job should be marked failed.
     """
@@ -88,11 +114,12 @@ class JobResult:
 
 @dataclass
 class ActivityDefinition:
-    type_name: str
-    handler: Callable[[dict, Budget], JobResult]
-    default_priority: int
-    resumable: bool            # Can a paused job be continued next cycle?
-    deduplicate: bool          # Skip enqueue if a pending/paused job of this type exists?
+    type_name:   str
+    handler:     Callable[[dict, Budget], JobResult]
+    tier:        int                                    # unique hard-priority partition
+    d_fn:        Optional[Callable[[dict], float]]     # urgency scorer; None → D=0.5
+    resumable:   bool      # can a paused job be continued next cycle?
+    deduplicate: bool      # skip enqueue if pending/paused job of this type exists?
     description: str = ""
 
 
@@ -100,91 +127,253 @@ _REGISTRY: dict[str, ActivityDefinition] = {}
 
 
 def register_activity(
-    type_name: str,
-    handler: Callable[[dict, Budget], JobResult],
-    default_priority: int = 50,
-    resumable: bool = True,
+    type_name:   str,
+    handler:     Callable[[dict, Budget], JobResult],
+    tier:        int,
+    d_fn:        Optional[Callable[[dict], float]] = None,
+    resumable:   bool = True,
     deduplicate: bool = True,
     description: str = "",
 ) -> None:
-    """Register an activity type. Call at module import time."""
+    """
+    Register an activity type. Call at module import time.
+
+    tier must be unique across all registered activities, EXCEPT that
+    activities intended to compete purely on D (e.g. ruminate / solo_work)
+    may share a tier.
+    """
     _REGISTRY[type_name] = ActivityDefinition(
         type_name=type_name,
         handler=handler,
-        default_priority=default_priority,
+        tier=tier,
+        d_fn=d_fn,
         resumable=resumable,
         deduplicate=deduplicate,
         description=description,
     )
-    logger.debug(f"WorkQueue: registered activity '{type_name}' (priority={default_priority})")
+    logger.debug(
+        f"WorkQueue: registered '{type_name}' "
+        f"(tier={tier}, d_fn={'yes' if d_fn else 'default 0.5'})"
+    )
 
 
 def registered_types() -> list[str]:
     return list(_REGISTRY.keys())
 
 
+# ── D-score computation ────────────────────────────────────────────────────
+
+def compute_d(type_name: str, system_state: dict) -> float:
+    """
+    Compute the urgency score D ∈ [0.0, 1.0] for an activity type.
+
+    If the activity has no d_fn registered, returns 0.5 (always above
+    D_MIN, never dominates activities with real D functions).
+    """
+    defn = _REGISTRY.get(type_name)
+    if defn is None:
+        return 0.0
+    if defn.d_fn is None:
+        return 0.5
+    try:
+        raw = defn.d_fn(system_state)
+        return max(0.0, min(1.0, float(raw)))
+    except Exception as e:
+        logger.warning(f"WorkQueue: d_fn for '{type_name}' raised {e}, defaulting D=0.0")
+        return 0.0
+
+
+def select_next_activity(system_state: dict) -> Optional[str]:
+    """
+    Select the activity type to run next cycle.
+
+    Algorithm:
+      1. Compute D for all registered activity types.
+      2. Exclude any with D < D_MIN.
+      3. Find the lowest tier among remaining eligible activities.
+      4. Among activities in that tier, return the one with highest D.
+      5. Return None if nothing is eligible.
+
+    This means a tier-0 activity with D=0.06 beats a tier-20 activity
+    with D=0.95 — tier is a hard gate, not a soft preference.
+    """
+    scores: dict[str, float] = {}
+    for type_name in _REGISTRY:
+        d = compute_d(type_name, system_state)
+        if d >= D_MIN:
+            scores[type_name] = d
+
+    if not scores:
+        return None
+
+    lowest_tier = min(_REGISTRY[t].tier for t in scores)
+    tier_candidates = {t: d for t, d in scores.items()
+                       if _REGISTRY[t].tier == lowest_tier}
+
+    winner = max(tier_candidates, key=tier_candidates.get)
+    logger.debug(
+        f"WorkQueue: selected '{winner}' "
+        f"(tier={lowest_tier}, D={tier_candidates[winner]:.3f}) "
+        f"from {len(scores)} eligible activities"
+    )
+    return winner
+
+
+# ── System state ───────────────────────────────────────────────────────────
+
+def get_system_state() -> dict:
+    """
+    Collect all live inputs needed by D functions.
+
+    Returns a dict with well-known keys. Add keys here as new D functions
+    require new inputs — all D functions receive the full state dict and
+    can ignore keys they don't need.
+    """
+    import os
+    from pathlib import Path
+
+    state: dict[str, Any] = {}
+
+    # Inbox depth
+    try:
+        row = execute(
+            "SELECT COUNT(*) AS n FROM inbox WHERE processed = FALSE",
+            fetch='one'
+        )
+        state['inbox_depth'] = int(row['n']) if row else 0
+    except Exception:
+        state['inbox_depth'] = 0
+
+    # Time since last user interaction (seconds)
+    try:
+        row = execute(
+            "SELECT timestamp FROM activity ORDER BY timestamp DESC LIMIT 1",
+            fetch='one'
+        )
+        if row:
+            last = row['timestamp']
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            state['seconds_since_interaction'] = (
+                datetime.now(timezone.utc) - last
+            ).total_seconds()
+        else:
+            state['seconds_since_interaction'] = float('inf')
+    except Exception:
+        state['seconds_since_interaction'] = float('inf')
+
+    # Raw conversation file backlog
+    try:
+        raw_dir = Path(os.environ.get('SOMNIA_DATA_DIR', '/data/somnia')) / 'harvest' / 'raw'
+        if raw_dir.exists():
+            state['harvest_backlog'] = sum(1 for f in raw_dir.glob('*.json'))
+        else:
+            state['harvest_backlog'] = 0
+    except Exception:
+        state['harvest_backlog'] = 0
+
+    # Time since last harvest (seconds)
+    try:
+        from conversation_harvester import load_harvest_state
+        hs = load_harvest_state()
+        last_h = hs.get('last_harvest_at')
+        if last_h:
+            last_dt = datetime.fromisoformat(last_h)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            state['seconds_since_harvest'] = (
+                datetime.now(timezone.utc) - last_dt
+            ).total_seconds()
+        else:
+            state['seconds_since_harvest'] = float('inf')
+    except Exception:
+        state['seconds_since_harvest'] = float('inf')
+
+    return state
+
+
 # ── Job lifecycle ──────────────────────────────────────────────────────────
 
 def enqueue(
-    type_name: str,
-    priority: Optional[int] = None,
-    progress: Optional[dict] = None,
+    type_name:   str,
+    progress:    Optional[dict] = None,
     deduplicate: bool = True,
 ) -> Optional[str]:
     """
     Add a job to the queue. Returns the new job ID, or None if deduplicated.
 
-    If deduplicate=True (and the activity definition also has deduplicate=True),
-    skips enqueueing if a pending or paused job of this type already exists.
+    Priority stored in work_queue is derived from the activity's tier —
+    lower tier = lower priority integer = sorts first. Within a tier,
+    jobs sort by created_at (FIFO). D-score selection happens at scheduling
+    time, not storage time.
     """
     defn = _REGISTRY.get(type_name)
-    effective_priority = priority if priority is not None else (
-        defn.default_priority if defn else 50
-    )
     should_dedup = deduplicate and (defn.deduplicate if defn else True)
 
     if should_dedup:
         existing = execute(
-            "SELECT id FROM work_queue WHERE type = %s AND state IN ('pending','paused') LIMIT 1",
+            "SELECT id FROM work_queue "
+            "WHERE type = %s AND state IN ('pending','paused') LIMIT 1",
             (type_name,), fetch='one'
         )
         if existing:
-            logger.debug(f"WorkQueue: enqueue '{type_name}' skipped — already queued ({existing['id'][:8]})")
+            logger.debug(
+                f"WorkQueue: enqueue '{type_name}' skipped — "
+                f"already queued ({existing['id'][:8]})"
+            )
             return None
 
     job_id = str(uuid.uuid4())
+    tier = defn.tier if defn else 50
     execute(
         """
         INSERT INTO work_queue (id, type, priority, state, progress, created_at)
         VALUES (%s, %s, %s, 'pending', %s, NOW())
         """,
-        (job_id, type_name, effective_priority,
-         __import__('json').dumps(progress) if progress else None)
+        (job_id, type_name, tier,
+         json.dumps(progress) if progress else None)
     )
-    logger.info(f"WorkQueue: enqueued '{type_name}' job {job_id[:8]} (priority={effective_priority})")
+    logger.info(
+        f"WorkQueue: enqueued '{type_name}' job {job_id[:8]} (tier={tier})"
+    )
     return job_id
 
 
-def get_next_job() -> Optional[dict]:
+def get_or_create_job(type_name: str) -> Optional[dict]:
     """
-    Fetch the highest-priority runnable job (pending or paused).
-    Marks it in_progress atomically.
-    Returns None if queue is empty.
+    Get an existing pending/paused job of this type, or create one.
+    Returns the job dict with state set to in_progress.
     """
+    # Try to claim an existing job atomically
     row = execute(
         """
         UPDATE work_queue
         SET    state = 'in_progress', last_run_at = NOW()
         WHERE  id = (
             SELECT id FROM work_queue
-            WHERE  state IN ('pending', 'paused')
-            ORDER  BY priority ASC, created_at ASC
+            WHERE  type = %s AND state IN ('pending', 'paused')
+            ORDER  BY created_at ASC
             LIMIT  1
             FOR UPDATE SKIP LOCKED
         )
         RETURNING *
         """,
-        fetch='one'
+        (type_name,), fetch='one'
+    )
+    if row:
+        return dict(row)
+
+    # No existing job — create and immediately claim one
+    defn = _REGISTRY.get(type_name)
+    tier = defn.tier if defn else 50
+    job_id = str(uuid.uuid4())
+    row = execute(
+        """
+        INSERT INTO work_queue (id, type, priority, state, created_at, last_run_at)
+        VALUES (%s, %s, %s, 'in_progress', NOW(), NOW())
+        RETURNING *
+        """,
+        (job_id, type_name, tier), fetch='one'
     )
     return dict(row) if row else None
 
@@ -223,7 +412,7 @@ def pause_job(job_id: str, cursor: Optional[dict], tokens_used: int = 0) -> None
             tokens_used = tokens_used + %s
         WHERE id = %s
         """,
-        (__import__('json').dumps(cursor) if cursor else None, tokens_used, job_id)
+        (json.dumps(cursor) if cursor else None, tokens_used, job_id)
     )
     logger.debug(f"WorkQueue: job {job_id[:8]} paused (+{tokens_used} tokens)")
 
@@ -231,26 +420,33 @@ def pause_job(job_id: str, cursor: Optional[dict], tokens_used: int = 0) -> None
 # ── Cycle runner ───────────────────────────────────────────────────────────
 
 def run_cycle(
-    budget_tokens: int = 50_000,
+    budget_tokens:  int   = 50_000,
     budget_seconds: float = 1200.0,
+    dry_run:        bool  = False,
 ) -> dict[str, Any]:
     """
     Run the dream queue for one cycle.
 
-    Picks jobs from the queue in priority order, dispatches each to its
-    registered handler, and pauses or completes based on the result.
-    Stops when the budget (tokens or time) is exhausted, or the queue
-    is empty.
+    Each iteration:
+      1. Refresh system state (inbox depth, backlog, time, etc.)
+      2. Select the highest-urgency eligible activity (tier + D)
+      3. Dispatch to its handler
+      4. Pause or complete based on result
+      5. Repeat until budget exhausted or queue empty
 
-    Returns a summary dict for logging/sticky-notes.
+    dry_run=True: evaluates and logs selections without executing handlers.
+    Useful for one-night parity checks before cutting over from old scheduler.
+
+    Returns a summary dict for logging and sticky notes.
     """
     summary: dict[str, Any] = {
         "jobs_attempted": 0,
         "jobs_completed": 0,
-        "jobs_paused": 0,
-        "jobs_failed": 0,
-        "total_tokens": 0,
-        "activity_log": [],
+        "jobs_paused":    0,
+        "jobs_failed":    0,
+        "total_tokens":   0,
+        "dry_run":        dry_run,
+        "activity_log":   [],
     }
 
     budget = Budget(
@@ -259,42 +455,63 @@ def run_cycle(
     )
 
     logger.info(
-        f"WorkQueue: cycle start — budget {budget_tokens:,} tokens / "
-        f"{budget_seconds:.0f}s"
+        f"WorkQueue: cycle start {'(DRY RUN) ' if dry_run else ''}"
+        f"— budget {budget_tokens:,} tokens / {budget_seconds:.0f}s"
     )
 
     while not budget.is_exhausted():
-        job = get_next_job()
-        if job is None:
-            logger.info("WorkQueue: queue empty, cycle done")
+        # Refresh system state each iteration — inbox depth changes as jobs run
+        system_state = get_system_state()
+
+        atype = select_next_activity(system_state)
+        if atype is None:
+            logger.info("WorkQueue: no eligible activities, cycle done")
             break
 
-        job_id   = job["id"]
-        job_type = job["type"]
+        d_score = compute_d(atype, system_state)
+        tier    = _REGISTRY[atype].tier
+
+        if dry_run:
+            logger.info(
+                f"WorkQueue [DRY RUN]: would run '{atype}' "
+                f"(tier={tier}, D={d_score:.3f})"
+            )
+            summary["activity_log"].append({
+                "type": atype, "tier": tier, "d": d_score, "outcome": "dry_run"
+            })
+            # In dry run, break after one selection — enough to validate logic
+            break
+
         summary["jobs_attempted"] += 1
+        defn = _REGISTRY[atype]
 
-        defn = _REGISTRY.get(job_type)
-        if defn is None:
-            err = f"No handler registered for activity type '{job_type}'"
-            mark_failed(job_id, err)
-            summary["jobs_failed"] += 1
-            summary["activity_log"].append({"type": job_type, "outcome": "failed", "error": err})
-            logger.warning(f"WorkQueue: {err}")
-            continue
+        job = get_or_create_job(atype)
+        if not job:
+            logger.warning(f"WorkQueue: could not get/create job for '{atype}'")
+            break
 
-        # Remaining budget for this handler
-        budget.tokens_remaining = budget_tokens - summary["total_tokens"]
+        job_id = job["id"]
+
+        # Update remaining budget before passing to handler
+        budget.tokens_remaining  = budget_tokens  - summary["total_tokens"]
         budget.seconds_remaining = budget_seconds - budget.elapsed()
 
-        logger.info(f"WorkQueue: running '{job_type}' {job_id[:8]}")
+        logger.info(
+            f"WorkQueue: running '{atype}' {job_id[:8]} "
+            f"(tier={tier}, D={d_score:.3f})"
+        )
+
         try:
             result: JobResult = defn.handler(job, budget)
         except Exception as exc:
             err = f"Unhandled exception in handler: {exc}"
             mark_failed(job_id, err)
             summary["jobs_failed"] += 1
-            summary["activity_log"].append({"type": job_type, "outcome": "failed", "error": err})
-            logger.exception(f"WorkQueue: handler for '{job_type}' raised")
+            summary["activity_log"].append({
+                "type": atype, "tier": tier, "d": d_score,
+                "outcome": "failed", "error": err
+            })
+            logger.exception(f"WorkQueue: handler for '{atype}' raised")
             continue
 
         summary["total_tokens"] += result.tokens_used
@@ -303,35 +520,40 @@ def run_cycle(
             mark_failed(job_id, result.error, result.tokens_used)
             summary["jobs_failed"] += 1
             summary["activity_log"].append({
-                "type": job_type, "outcome": "failed",
-                "error": result.error, "tokens": result.tokens_used
+                "type": atype, "tier": tier, "d": d_score,
+                "outcome": "failed", "error": result.error,
+                "tokens": result.tokens_used
             })
         elif result.complete:
             mark_complete(job_id, result.tokens_used)
             summary["jobs_completed"] += 1
             summary["activity_log"].append({
-                "type": job_type, "outcome": "complete",
-                "tokens": result.tokens_used
+                "type": atype, "tier": tier, "d": d_score,
+                "outcome": "complete", "tokens": result.tokens_used
             })
         else:
             if not defn.resumable:
-                # Non-resumable job that returned incomplete — treat as failed
-                mark_failed(job_id, "Handler returned incomplete but activity is not resumable")
+                mark_failed(
+                    job_id,
+                    "Handler returned incomplete but activity is not resumable"
+                )
                 summary["jobs_failed"] += 1
             else:
                 pause_job(job_id, result.cursor, result.tokens_used)
                 summary["jobs_paused"] += 1
                 summary["activity_log"].append({
-                    "type": job_type, "outcome": "paused",
-                    "tokens": result.tokens_used,
+                    "type": atype, "tier": tier, "d": d_score,
+                    "outcome": "paused", "tokens": result.tokens_used,
                     "cursor": result.cursor
                 })
 
     elapsed = budget.elapsed()
     summary["elapsed_seconds"] = round(elapsed, 1)
     logger.info(
-        f"WorkQueue: cycle done — {summary['jobs_completed']} complete, "
-        f"{summary['jobs_paused']} paused, {summary['jobs_failed']} failed, "
+        f"WorkQueue: cycle done — "
+        f"{summary['jobs_completed']} complete, "
+        f"{summary['jobs_paused']} paused, "
+        f"{summary['jobs_failed']} failed, "
         f"{summary['total_tokens']:,} tokens, {elapsed:.1f}s"
     )
     return summary
@@ -342,11 +564,7 @@ def run_cycle(
 def queue_depth() -> dict[str, int]:
     """Return counts by state — useful for status endpoints and sticky notes."""
     rows = execute(
-        """
-        SELECT state, COUNT(*) AS n
-        FROM work_queue
-        GROUP BY state
-        """,
+        "SELECT state, COUNT(*) AS n FROM work_queue GROUP BY state",
         fetch='all'
     )
     return {row['state']: row['n'] for row in (rows or [])}
@@ -365,3 +583,16 @@ def queue_summary(limit: int = 20) -> list[dict]:
         (limit,), fetch='all'
     )
     return [dict(r) for r in (rows or [])]
+
+
+def current_d_scores(system_state: Optional[dict] = None) -> dict[str, dict]:
+    """
+    Return D scores and tier for all registered activity types.
+    Useful for status endpoints and portal dashboard display.
+    """
+    if system_state is None:
+        system_state = get_system_state()
+    return {
+        t: {"tier": _REGISTRY[t].tier, "d": compute_d(t, system_state)}
+        for t in _REGISTRY
+    }
