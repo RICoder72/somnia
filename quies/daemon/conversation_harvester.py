@@ -256,7 +256,7 @@ def add_to_inbox(observations, conv_name, conv_uuid):
             f"[harvested from '{conv_name}' {conv_uuid[:8]}] {obs.strip()}"
         )
         execute(
-            "INSERT INTO inbox (content, domain, source, created_at) "
+            "INSERT INTO inbox (content, domain, source_conversation, captured_at) "
             "VALUES (%s, %s, %s, NOW())",
             (content, "harvested", "conversation_harvester")
         )
