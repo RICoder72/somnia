@@ -835,11 +835,12 @@ async def view_file(domain: str, path: str = Query(...)):
       <span class="sep">/</span>
       <span>{target.name}</span>
     </div>
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+    <div class="view-toolbar" style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
       <a href="{back_url}" class="btn btn-secondary" style="font-size:12px;">← Back</a>
       <a href="/portal/api/download/{domain}?path={path}" class="btn btn-secondary" style="font-size:12px;">↓ Download</a>
+      <button onclick="window.print()" class="btn btn-secondary" style="font-size:12px;cursor:pointer;">🖨 Print</button>
     </div>
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:32px 40px;max-width:860px;">
+    <div class="md-card" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:32px 40px;max-width:860px;">
       <div id="md-content"></div>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
@@ -861,6 +862,31 @@ async def view_file(domain: str, path: str = Query(...)):
       #md-content a {{ color:var(--accent); }}
       #md-content hr {{ border:none;border-top:1px solid var(--border);margin:1.5em 0; }}
       #md-content strong {{ color:var(--text);font-weight:600; }}
+      @media print {{
+        .topbar, .breadcrumb, .view-toolbar, #toast {{ display:none !important; }}
+        body {{ background:#fff !important; }}
+        .container {{ padding:0 !important; max-width:none !important; }}
+        .md-card {{
+          background:#fff !important;
+          border:none !important;
+          border-radius:0 !important;
+          padding:0 !important;
+          max-width:none !important;
+          box-shadow:none !important;
+        }}
+        #md-content, #md-content p, #md-content li {{ color:#111 !important; }}
+        #md-content h1, #md-content h2, #md-content h3 {{ color:#000 !important; }}
+        #md-content h1 {{ border-bottom:1px solid #ccc !important; }}
+        #md-content h2 {{ border-bottom:1px solid #eee !important; }}
+        #md-content code {{ background:#f5f5f5 !important; border-color:#ddd !important; color:#c7254e !important; }}
+        #md-content pre {{ background:#f5f5f5 !important; border-color:#ddd !important; }}
+        #md-content pre code {{ color:#333 !important; }}
+        #md-content th {{ background:#f0f0f0 !important; color:#333 !important; border-color:#ccc !important; }}
+        #md-content td {{ border-color:#ddd !important; }}
+        #md-content blockquote {{ border-left-color:#999 !important; color:#555 !important; }}
+        #md-content a {{ color:#0066cc !important; }}
+        #md-content tr:hover td {{ background:none !important; }}
+      }}
     </style>
     <script>
       document.getElementById('md-content').innerHTML = marked.parse(`{escaped}`);
