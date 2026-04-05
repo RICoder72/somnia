@@ -76,6 +76,75 @@ def load_config():
 
 CONFIG = load_config()
 
+# ============================================================================
+# STRUCTURAL EDGE TYPES
+# Edges with is_structural=True carry behavioral semantics that the daemon
+# acts on — not just labels. Add new types here; the daemon checks this dict.
+# ============================================================================
+
+STRUCTURAL_EDGE_TYPES = {
+    'superseded_by': {
+        # Source was renamed/replaced by target.
+        # Source node is treated as retired: suppressed from active dashboards,
+        # dream cycle won't write new edges to it as if it's active.
+        'suppress_source': True,
+        'warmth_cascade': False,
+        'cascade_factor': 0.0,
+    },
+    'part_of': {
+        # Source is a component/subproject of target.
+        # Warmth propagates upward: reinforcing the child warms the parent.
+        'suppress_source': False,
+        'warmth_cascade': True,
+        'cascade_factor': 0.3,   # 30% of source warmth applied to parent
+    },
+    'merged_into': {
+        # Source was absorbed into target; source is a redirect shell.
+        # Treated like superseded_by but implies content was folded in.
+        'suppress_source': True,
+        'warmth_cascade': False,
+        'cascade_factor': 0.0,
+    },
+}
+
+def get_structural_edges(node_id: str, direction: str = 'outgoing') -> list[dict]:
+    """Return structural edges for a node. direction: 'outgoing' | 'incoming' | 'both'."""
+    try:
+        if direction == 'outgoing':
+            rows = execute(
+                "SELECT * FROM edges WHERE source_id = %s AND is_structural = TRUE",
+                (node_id,), fetch=True
+            )
+        elif direction == 'incoming':
+            rows = execute(
+                "SELECT * FROM edges WHERE target_id = %s AND is_structural = TRUE",
+                (node_id,), fetch=True
+            )
+        else:
+            rows = execute(
+                "SELECT * FROM edges WHERE (source_id = %s OR target_id = %s) AND is_structural = TRUE",
+                (node_id, node_id), fetch=True
+            )
+        return [dict(r) for r in (rows or [])]
+    except Exception:
+        return []
+
+def is_node_retired(node_id: str) -> bool:
+    """True if node has a superseded_by or merged_into outgoing structural edge."""
+    edges = get_structural_edges(node_id, direction='outgoing')
+    return any(e['type'] in ('superseded_by', 'merged_into') for e in edges)
+
+def cascade_structural_warmth(node_id: str, delta: float):
+    """If node has a part_of edge, apply cascaded warmth to the parent node."""
+    edges = get_structural_edges(node_id, direction='outgoing')
+    for edge in edges:
+        if edge['type'] == 'part_of':
+            cfg = STRUCTURAL_EDGE_TYPES['part_of']
+            parent_delta = delta * cfg['cascade_factor']
+            if parent_delta > 0:
+                warm_nodes([edge['target_id']], delta=parent_delta)
+
+
 
 # ============================================================================
 # AUTH
@@ -407,8 +476,11 @@ def check_global_cooldown():
 # HEAT MAP — Automatic Decay Mechanics
 # ============================================================================
 
-def warm_nodes(node_ids, delta=0.02):
-    """Bump decay_state up for accessed nodes. Capped at 1.0. Promotes SLTM→LTM."""
+def warm_nodes(node_ids, delta=0.02, _cascade=True):
+    """Bump decay_state up for accessed nodes. Capped at 1.0. Promotes SLTM→LTM.
+    If a node has a part_of structural edge, cascades fractional warmth to its parent.
+    _cascade=False breaks the recursion (parents don't cascade to grandparents).
+    """
     if not node_ids:
         return
     for nid in node_ids:
@@ -418,6 +490,12 @@ def warm_nodes(node_ids, delta=0.02):
             memory_layer = 'ltm'
             WHERE id = %s
         """, (delta, nid))
+        # Cascade warmth upward through part_of structural edges (one level only)
+        if _cascade:
+            try:
+                cascade_structural_warmth(nid, delta)
+            except Exception:
+                pass  # never let cascade errors break warm_nodes
 
 
 def apply_passive_cooldown():
