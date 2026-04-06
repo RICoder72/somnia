@@ -35,13 +35,13 @@ from .converter import (
 
 logger = logging.getLogger(__name__)
 
-DOMAINS_ROOT = Path("/data/domains")
+WORKSPACES_ROOT = Path("/data/workspaces")
 
 
 # ── Config & directory helpers ──────────────────────────────────────────────
 
 def _plugin_path(domain: str) -> Path:
-    return DOMAINS_ROOT / domain / "plugins" / "supernote"
+    return WORKSPACES_ROOT / domain / "plugins" / "supernote"
 
 
 def _config_path(domain: str) -> Path:
@@ -343,7 +343,7 @@ def register(mcp: FastMCP):
         if not REPORTLAB_AVAILABLE:
             return "❌ reportlab not installed"
 
-        domain_path = DOMAINS_ROOT / domain
+        domain_path = WORKSPACES_ROOT / domain
         md_path = domain_path / source
         if not md_path.exists():
             return f"❌ File not found: {source}"

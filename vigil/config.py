@@ -9,7 +9,8 @@ from pathlib import Path
 
 # Base paths
 DATA_ROOT = Path("/data")
-DOMAINS_DIR = DATA_ROOT / "domains"
+DOMAINS_DIR = DATA_ROOT / "domains"         # DEPRECATED - migrating to workspaces
+WORKSPACES_DIR = DATA_ROOT / "workspaces"
 CONFIG_DIR = DATA_ROOT / "config"
 OUTPUTS_DIR = DATA_ROOT / "outputs"
 

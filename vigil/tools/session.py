@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from fastmcp import FastMCP
 
-from config import DOMAINS_DIR, DATA_ROOT, DOMAIN_TRIGGERS_FILE
+from config import WORKSPACES_DIR, DATA_ROOT, DOMAIN_TRIGGERS_FILE
 
 SOMNIA_DB = DATA_ROOT / "somnia" / "db" / "somnia.db"
 
@@ -33,11 +33,11 @@ def _detect_domain(text: str, keywords: dict) -> str | None:
 
 
 def _get_available_domains(config: dict) -> list[dict]:
-    if not DOMAINS_DIR.exists():
+    if not WORKSPACES_DIR.exists():
         return []
 
     domains = []
-    for item in sorted(DOMAINS_DIR.iterdir()):
+    for item in sorted(WORKSPACES_DIR.iterdir()):
         if item.is_dir() and not item.name.startswith("_"):
             cfg = config.get(item.name, {})
             domains.append({
@@ -243,7 +243,7 @@ def register(mcp: FastMCP):
                 lines.append("")
 
         if detected:
-            domain_path = DOMAINS_DIR / detected
+            domain_path = WORKSPACES_DIR / detected
             context_file = domain_path / f"{detected}.md"
             if context_file.exists():
                 lines.append(f"📖 Loaded domain: {detected}")
