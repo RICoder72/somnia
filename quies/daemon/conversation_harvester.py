@@ -129,18 +129,27 @@ def _headers(session_key):
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-origin",
+        "x-activity-session-id": str(__import__('uuid').uuid4()),
     }
 
 
 def fetch_conversations(session_key, limit=50):
+    # API changed to chat_conversations_v2 (2026-04-06).
+    # Returns {"data": [...], "has_more": bool} instead of a flat list.
+    # Browser makes two calls (starred=true then starred=false); we only
+    # need the non-starred call which contains all conversations.
     r = requests.get(
-        f"{CLAUDE_AI_BASE}/api/organizations/{CLAUDE_ORG_UUID}/chat_conversations",
+        f"{CLAUDE_AI_BASE}/api/organizations/{CLAUDE_ORG_UUID}/chat_conversations_v2",
         headers=_headers(session_key),
-        params={"limit": limit},
+        params={"limit": limit, "starred": "false", "consistency": "eventual"},
         timeout=30
     )
     r.raise_for_status()
-    return r.json()
+    payload = r.json()
+    # Unwrap v2 envelope
+    if isinstance(payload, dict) and "data" in payload:
+        return payload["data"]
+    return payload  # fallback: already a list (old API)
 
 
 def fetch_conversation_messages(session_key, conv_uuid):
