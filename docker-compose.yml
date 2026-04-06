@@ -70,10 +70,10 @@ services:
       - "8000:8000"
     volumes:
       - ${SOMNIA_CONFIG_DIR:-./config}:/data/config:ro
-      - ${SOMNIA_DOMAINS_DIR:-./domains}:/data/domains
+      - ${SOMNIA_WORKSPACES_DIR:-./workspaces}:/data/workspaces
       - ${SOMNIA_REPOS_DIR:-./}:/data/repos
       - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs
-      - ${SOMNIA_DOCUMENTS_DIR:-./documents}:/data/documents
+      - ${SOMNIA_RUNTIME_DIR:-./runtime}:/data/runtime
     environment:
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
       CREDENTIALS_API_KEY: ${CREDENTIALS_API_KEY:-}
