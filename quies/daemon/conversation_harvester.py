@@ -112,11 +112,23 @@ def get_session_key():
 # ── Claude.ai API calls ────────────────────────────────────────────────────
 
 def _headers(session_key):
+    # Headers matched to actual Claude.ai browser requests (2026-04-06).
+    # anthropic-* headers required for conversation endpoints.
     return {
         "Cookie": f"sessionKey={session_key}",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0",
+        "Accept": "*/*",
+        "content-type": "application/json",
         "Referer": "https://claude.ai/",
+        "Origin": "https://claude.ai",
+        "anthropic-anonymous-id": "claudeai.v1.a68e81fa-108d-4b3f-b062-6fcf4ba8a9f5",
+        "anthropic-client-platform": "web_claude_ai",
+        "anthropic-client-sha": "c7c35a812db05f5e0dc02c7d83a6ceea05b2fdc1",
+        "anthropic-client-version": "1.0.0",
+        "anthropic-device-id": "d7ddc069-74a6-4308-858e-494bc3b46804",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
     }
 
 
