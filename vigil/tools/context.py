@@ -8,7 +8,7 @@ load domain markdown files directly, and somnia_recall for associative context.
 
 from fastmcp import FastMCP
 
-from config import DOMAINS_DIR
+from config import WORKSPACES_DIR
 
 
 def register(mcp: FastMCP):
@@ -20,7 +20,7 @@ def register(mcp: FastMCP):
         Args:
             domain: Domain name, or empty string for global instructions"""
         if domain:
-            instructions_file = DOMAINS_DIR / domain / "INSTRUCTIONS.md"
+            instructions_file = WORKSPACES_DIR / domain / "INSTRUCTIONS.md"
             label = f"Domain '{domain}'"
         else:
             from config import DATA_ROOT
@@ -44,7 +44,7 @@ def register(mcp: FastMCP):
             content: The instruction content (markdown)
             domain: Domain name, or empty string for global instructions"""
         if domain:
-            domain_path = DOMAINS_DIR / domain
+            domain_path = WORKSPACES_DIR / domain
             if not domain_path.exists():
                 return f"❌ Domain '{domain}' does not exist"
             instructions_file = domain_path / "INSTRUCTIONS.md"

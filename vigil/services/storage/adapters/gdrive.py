@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Token locations: writable copy preferred, read-only original as fallback
 TOKEN_PATH_RO = Path("/data/config/gdrive_token.json")
-TOKEN_PATH_RW = Path("/data/domains/.state/tokens/gdrive_token.json")
+TOKEN_PATH_RW = Path("/data/config/tokens/gdrive_token.json")
 
 
 class GoogleDriveProvider(StorageProvider):
