@@ -3537,14 +3537,13 @@ def backfill_export():
             continue
 
         try:
-            result = mine_conversation(conv_text, api_key)
+            observations = mine_conversation(conv_text, api_key)
         except Exception as e:
             app.logger.error(f"backfill mine error '{name[:40]}': {e}")
             errors += 1
             continue
 
-        observations = result.get('observations', [])
-        cost = result.get('cost_usd', 0.0)
+        cost = 0.0  # harvester mine_conversation doesn't return cost separately
         total_cost += cost
 
         if observations:
