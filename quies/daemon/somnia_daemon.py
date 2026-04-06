@@ -3435,6 +3435,145 @@ def harvest_run():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/backfill/export", methods=["POST"])
+def backfill_export():
+    """Mine conversations from a Claude.ai export zip.
+
+    POST body (JSON, all optional):
+      zip_path   — path to export zip (default: /data/workspaces/claude/findings/*.zip)
+      limit      — max conversations to mine per call (default: 30)
+      max_cost   — USD spending cap (default: 1.50)
+      skip_before — ISO date string, skip convs before this (default: 2024-01-01)
+      dry_run    — if true, skip API calls and just count candidates
+
+    Runs synchronously. Call repeatedly to work through the full backlog.
+    Returns: {mined, observations, cost_usd, remaining, status}
+    """
+    import zipfile, glob
+    from conversation_harvester import extract_conversation_text, mine_conversation, add_to_inbox
+    from conversation_harvester import load_harvest_state, save_harvest_state
+
+    body = request.get_json(silent=True) or {}
+    limit = int(body.get('limit', 30))
+    max_cost = float(body.get('max_cost', 1.50))
+    skip_before_str = body.get('skip_before', '2024-01-01')
+    dry_run = bool(body.get('dry_run', False))
+
+    # Find zip
+    zip_path = body.get('zip_path')
+    if not zip_path:
+        zips = glob.glob('/data/workspaces/claude/findings/*.zip')
+        if not zips:
+            return jsonify({"error": "No export zip found in /data/workspaces/claude/findings/"}), 404
+        zip_path = sorted(zips)[-1]  # most recent
+
+    # Load conversations
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            with z.open('conversations.json') as f:
+                convs = json.load(f)
+    except Exception as e:
+        return jsonify({"error": f"Failed to read zip: {e}"}), 500
+
+    # Load processed UUIDs from harvest state
+    state = load_harvest_state()
+    processed = set(state.get('processed_uuids', []))
+
+    # Filter candidates
+    from datetime import timezone
+    try:
+        skip_before = datetime.fromisoformat(skip_before_str).replace(tzinfo=timezone.utc)
+    except Exception:
+        skip_before = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    candidates = []
+    for c in convs:
+        uuid = c.get('uuid', '')
+        if uuid in processed:
+            continue
+        created = c.get('created_at', '')
+        if created:
+            try:
+                dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                if dt < skip_before:
+                    processed.add(uuid)  # mark old ones as skipped
+                    continue
+            except Exception:
+                pass
+        msgs = c.get('chat_messages', [])
+        if len(msgs) < 2:
+            processed.add(uuid)
+            continue
+        candidates.append(c)
+
+    candidates.sort(key=lambda c: c.get('created_at', ''))
+    remaining_before = len(candidates)
+
+    if dry_run:
+        return jsonify({
+            "status": "dry_run",
+            "candidates": remaining_before,
+            "zip": zip_path,
+            "already_processed": len(state.get('processed_uuids', [])),
+        })
+
+    # Get API key
+    api_key = get_api_key()
+    if not api_key:
+        return jsonify({"error": "No API key — check 1Password"}), 503
+
+    total_obs = 0
+    total_cost = 0.0
+    mined = 0
+    errors = 0
+
+    for c in candidates[:limit]:
+        uuid = c.get('uuid', '')
+        name = c.get('name', 'Untitled') or 'Untitled'
+
+        conv_text = extract_conversation_text(c)
+        if not conv_text.strip() or len(conv_text) < 100:
+            processed.add(uuid)
+            continue
+
+        try:
+            result = mine_conversation(conv_text, api_key)
+        except Exception as e:
+            app.logger.error(f"backfill mine error '{name[:40]}': {e}")
+            errors += 1
+            continue
+
+        observations = result.get('observations', [])
+        cost = result.get('cost_usd', 0.0)
+        total_cost += cost
+
+        if observations:
+            count = add_to_inbox(observations, name, uuid)
+            total_obs += count
+
+        processed.add(uuid)
+        mined += 1
+
+        if total_cost >= max_cost:
+            app.logger.info(f"backfill: cost cap ${max_cost} reached")
+            break
+
+    # Save updated state
+    state['processed_uuids'] = list(processed)
+    save_harvest_state(state)
+
+    remaining_after = remaining_before - mined
+    return jsonify({
+        "status": "ok",
+        "mined": mined,
+        "observations": total_obs,
+        "cost_usd": round(total_cost, 4),
+        "errors": errors,
+        "remaining": max(0, remaining_after),
+        "zip": zip_path,
+    })
+
+
 @app.route("/search", methods=["GET"])
 def search_nodes():
     """Full-text search across both LTM and STM using PostgreSQL tsvector."""
