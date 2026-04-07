@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # Paths - separate app code from persistent data
 APP_DIR = Path(os.environ.get("SOMNIA_APP_DIR", "/app"))
 DATA_DIR = Path(os.environ.get("SOMNIA_DATA_DIR", "/data/somnia"))
+SOLO_WORK_DIR = Path(os.environ.get("QUIES_SOLO_WORK_DIR", str(DATA_DIR / "solo-work")))
 
 CONFIG_PATH = APP_DIR / "daemon" / "config.yaml"
 PROMPTS_DIR = APP_DIR / "prompts"
@@ -1951,7 +1952,7 @@ def _apply_solo_work_results(findings_json, dream_id):
     # Write findings document
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
     findings_filename = f"solo-work-{timestamp}.md"
-    findings_dir = DATA_DIR / "solo-work"
+    findings_dir = SOLO_WORK_DIR
     findings_dir.mkdir(parents=True, exist_ok=True)
     findings_path = findings_dir / findings_filename
 
@@ -2219,7 +2220,7 @@ def _refresh_portal_manifest(dream_id=None):
 
         # ── Solo-work entries (last 14 days) ──────────────────────────
         solo_work_entries = []
-        solo_dir = DATA_DIR / "solo-work"
+        solo_dir = SOLO_WORK_DIR
         if solo_dir.exists():
             cutoff_dt = datetime.now(_tz.utc)
             for f in sorted(solo_dir.glob("solo-work-*.md"), reverse=True):
@@ -2249,7 +2250,7 @@ def _refresh_portal_manifest(dream_id=None):
                 sig_rev = {v: k for k, v in sig_order.items()}
                 solo_work_entries.append({
                     "filename": fname,
-                    "path": f"somnia/solo-work/{fname}",
+                    "path": str(SOLO_WORK_DIR.relative_to(Path("/data")) / fname) if SOLO_WORK_DIR.is_relative_to(Path("/data")) else f"somnia/solo-work/{fname}",
                     "date": date_str,
                     "time": time_str,
                     "summary": summary_str,
@@ -2843,7 +2844,7 @@ def session_dashboard():
     dreams_since = activity.get('dreams_since_last_interaction', 0)
 
     # Check for recent solo-work findings
-    findings_dir = DATA_DIR / "solo-work"
+    findings_dir = SOLO_WORK_DIR
     recent_findings = []
     if findings_dir.exists():
         for f in sorted(findings_dir.glob("solo-work-*.md"), reverse=True)[:3]:
@@ -2928,7 +2929,7 @@ def journal():
 @app.route("/findings", methods=["GET"])
 def list_findings():
     """List solo-work findings documents."""
-    findings_dir = DATA_DIR / "solo-work"
+    findings_dir = SOLO_WORK_DIR
     limit = request.args.get("limit", 10, type=int)
     findings = []
     if findings_dir.exists():
@@ -2945,7 +2946,7 @@ def list_findings():
 @app.route("/findings/<filename>", methods=["GET"])
 def get_finding(filename):
     """Read a specific findings document."""
-    findings_dir = DATA_DIR / "solo-work"
+    findings_dir = SOLO_WORK_DIR
     path = findings_dir / filename
     if not path.exists() or not path.name.startswith("solo-work-"):
         return jsonify({"error": "Finding not found"}), 404
@@ -3419,16 +3420,37 @@ def harvest_reset():
 
 @app.route("/harvest/run", methods=["POST"])
 def harvest_run():
-    """Trigger a harvest immediately, bypassing the cooldown check.
-    Runs synchronously — may take 30-120 seconds for large backlogs.
-    Returns harvest result dict.
+    """Trigger a harvest immediately.
+    POST body (JSON, all optional):
+      force — if True, bypass cooldown (default: True since this is an explicit trigger)
+      limit — max conversations to mine (default: 10)
+    Runs synchronously. Returns harvest result dict.
     """
     try:
-        from conversation_harvester import run_harvest
+        from conversation_harvester import run_harvest, load_harvest_state
+        body = request.get_json(silent=True) or {}
+        limit = int(body.get("limit", 10))
+        force = bool(body.get("force", True))
+
+        # Check cooldown unless force=True
+        if not force:
+            state = load_harvest_state()
+            last = state.get("last_harvest_at")
+            if last:
+                import dateutil.parser as _dp
+                elapsed = (datetime.now(_tz.utc) - _dp.parse(last)).total_seconds()
+                cooldown = 20 * 3600  # 20h default
+                if elapsed < cooldown:
+                    remaining_h = (cooldown - elapsed) / 3600
+                    return jsonify({
+                        "skipped": True,
+                        "reason": f"cooldown active — {remaining_h:.1f}h remaining",
+                    })
+
         api_key = get_api_key()
         if not api_key:
             return jsonify({"error": "No API key available — check 1Password"}), 503
-        result = run_harvest(api_key)
+        result = run_harvest(api_key, limit=limit)
         return jsonify(result)
     except Exception as e:
         app.logger.error(f"harvest_run: {e}")

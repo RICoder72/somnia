@@ -45,13 +45,12 @@ services:
       # somnia_provision creates workspaces/{id}/ dirs and writes portal-manifest.json
       - ${SOMNIA_WORKSPACES_DIR:-./workspaces}:/data/workspaces
       - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs
-      # Legacy documents mount (kept for compatibility during transition)
-      - ${SOMNIA_DOCUMENTS_DIR:-./documents}:/data/documents
     environment:
       SOMNIA_PORT: "8010"
       SOMNIA_MCP_PORT: "8011"
       SOMNIA_DEBUG: "false"
       SOMNIA_DATABASE_URL: "postgresql://${POSTGRES_USER:-somnia}:${POSTGRES_PASSWORD}@somnia-postgres:5432/somnia"
+      QUIES_SOLO_WORK_DIR: "/data/workspaces/claude/findings"
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
     networks:
       - mcp-net
@@ -143,8 +142,6 @@ services:
       - ${SOMNIA_DOMAINS_DIR:-./domains}:/data/domains:ro
       # Portal file browser and reports serve from /data/workspaces/{domain}/
       - ${SOMNIA_WORKSPACES_DIR:-./workspaces}:/data/workspaces
-      # Legacy documents mount (kept for compatibility during transition)
-      - ${SOMNIA_DOCUMENTS_DIR:-./documents}:/data/documents
       # Portal reads portal-manifest.json from /data/outputs/
       - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs:ro
     environment:
