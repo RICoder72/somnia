@@ -779,7 +779,7 @@ async def file_browser_page(domain: str):
 @app.get("/portal/api/files/{domain}")
 async def api_list_files(domain: str, path: str = Query("")):
     info = get_domain_info(domain)
-    docs = WORKSPACES_ROOT / domain
+    docs = DATA_ROOT / info["docs_path"]
     docs.mkdir(parents=True, exist_ok=True)
     target = safe_resolve(docs, path)
     if not target.exists():
@@ -802,7 +802,7 @@ async def api_list_files(domain: str, path: str = Query("")):
 @app.get("/portal/api/download/{domain}")
 async def api_download(domain: str, path: str = Query(...)):
     info = get_domain_info(domain)
-    docs = WORKSPACES_ROOT / domain
+    docs = DATA_ROOT / info["docs_path"]
     target = safe_resolve(docs, path)
     if not target.is_file():
         raise HTTPException(404, "File not found")
@@ -813,7 +813,7 @@ async def api_download(domain: str, path: str = Query(...)):
 @app.get("/portal/files/{domain}/view", response_class=HTMLResponse)
 async def view_file(domain: str, path: str = Query(...)):
     info = get_domain_info(domain)
-    docs = WORKSPACES_ROOT / domain
+    docs = DATA_ROOT / info["docs_path"]
     target = safe_resolve(docs, path)
     if not target.is_file():
         raise HTTPException(404, "File not found")
@@ -907,7 +907,7 @@ async def api_upload(domain: str, file: UploadFile = File(...), path: str = Quer
     ext = Path(file.filename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, f"File type '{ext}' not permitted")
-    docs = WORKSPACES_ROOT / domain
+    docs = DATA_ROOT / info["docs_path"]
     dest_dir = safe_resolve(docs, path)
     if not dest_dir.is_dir():
         raise HTTPException(400, "Target path is not a directory")
@@ -970,7 +970,7 @@ async def reports_page(domain: str):
 @app.get("/portal/reports/{domain}/view", response_class=HTMLResponse)
 async def view_report(domain: str, file: str = Query(...)):
     info = get_domain_info(domain)
-    rdir = WORKSPACES_ROOT / domain / "reports"
+    rdir = DATA_ROOT / info["docs_path"] / "reports"
     target = safe_resolve(rdir, file)
     if not target.is_file() or target.suffix not in (".html", ".htm"):
         raise HTTPException(404, "Report not found")
@@ -980,7 +980,7 @@ async def view_report(domain: str, file: str = Query(...)):
 @app.get("/portal/api/reports/{domain}")
 async def api_list_reports(domain: str):
     info = get_domain_info(domain)
-    rdir = WORKSPACES_ROOT / domain / "reports"
+    rdir = DATA_ROOT / info["docs_path"] / "reports"
     rdir.mkdir(parents=True, exist_ok=True)
     reports = []
     for f in sorted(rdir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):

@@ -81,7 +81,19 @@ def _get_pinned_node(node_id: str) -> dict | None:
     """
     Fetch a specific pinned node from the graph by ID.
     Returns the node dict or None if not found / not pinned.
+
+    Uses /session (exact-ID match on pinned list) rather than /search,
+    which tokenises hyphens and may miss IDs like 'ai-philosophy'.
+    Falls back to /search for forward-compatibility.
     """
+    # Primary: exact-ID lookup from session pinned list
+    session = _api_get("/session")
+    if "error" not in session:
+        for node in session.get("pinned", []):
+            if node.get("id") == node_id:
+                return node
+
+    # Fallback: search (less reliable for hyphenated IDs)
     result = _api_get("/search", params={"q": node_id, "limit": 20})
     if "error" in result:
         return None
