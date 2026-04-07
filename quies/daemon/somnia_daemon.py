@@ -380,11 +380,14 @@ def find_gap_periods(gap_threshold_hours=2, max_periods=5):
     return periods[-max_periods:]
 
 
-def get_inbox_items():
-    """Get unprocessed STM nodes (short-term memory)."""
+def get_inbox_items(batch_size: int = 60):
+    """Get unprocessed STM nodes (short-term memory).
+    Batched to avoid blowing out the dream prompt context window.
+    Process cycles will drain the queue across multiple runs.
+    """
     rows = execute(
-        "SELECT id, content, domain, source, captured_at FROM stm_nodes ORDER BY captured_at",
-        fetch='all') or []
+        "SELECT id, content, domain, source, captured_at FROM stm_nodes ORDER BY captured_at LIMIT %s",
+        (batch_size,), fetch='all') or []
     # Convert timestamps for JSON
     items = []
     for row in rows:
