@@ -217,7 +217,7 @@ def update_state_flags(harvest_status=None, inbox_depth=None,
                     if l.strip() and not l.startswith("- Last harvest")
                     and not l.startswith("- Inbox depth")
                     and not l.startswith("- Last harvest summary")
-                    and (not l.startswith("- ⚠️") or nudge)
+                    and (not l.startswith("- ⚠️") or not nudge)
                 ]
                 sections["state_flags"] = "\n".join(existing_lines + flags)
                 NOTES_FILE.write_text(_render_notes(sections))
