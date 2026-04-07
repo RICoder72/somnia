@@ -42,8 +42,10 @@ services:
     volumes:
       - ./quies:/app:ro
       - quies-data:/data/somnia
-      # somnia_provision needs to write portal-manifest.json and create document folders
+      # somnia_provision creates workspaces/{id}/ dirs and writes portal-manifest.json
+      - ${SOMNIA_WORKSPACES_DIR:-./workspaces}:/data/workspaces
       - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs
+      # Legacy documents mount (kept for compatibility during transition)
       - ${SOMNIA_DOCUMENTS_DIR:-./documents}:/data/documents
     environment:
       SOMNIA_PORT: "8010"
@@ -139,8 +141,9 @@ services:
     volumes:
       - ${SOMNIA_CONFIG_DIR:-./config}:/data/config:ro
       - ${SOMNIA_DOMAINS_DIR:-./domains}:/data/domains:ro
-      # Portal file browser serves from /data/documents/{domain}/
-      # Portal reports serve from /data/documents/{domain}/reports/
+      # Portal file browser and reports serve from /data/workspaces/{domain}/
+      - ${SOMNIA_WORKSPACES_DIR:-./workspaces}:/data/workspaces
+      # Legacy documents mount (kept for compatibility during transition)
       - ${SOMNIA_DOCUMENTS_DIR:-./documents}:/data/documents
       # Portal reads portal-manifest.json from /data/outputs/
       - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs:ro
