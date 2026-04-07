@@ -312,7 +312,7 @@ def should_harvest():
 
 # ── Main entry point ───────────────────────────────────────────────────────
 
-def run_harvest(anthropic_api_key):
+def run_harvest(anthropic_api_key, limit: int = MAX_CONVERSATIONS_PER_RUN):
     """
     Main harvest cycle. Returns result dict.
     Writes ledger entries incrementally per conversation so partial
@@ -359,7 +359,7 @@ def run_harvest(anthropic_api_key):
     # ── Step 2: Fetch conversation list ──
     try:
         conversations = fetch_conversations(
-            session_key, limit=MAX_CONVERSATIONS_PER_RUN * 2
+            session_key, limit=limit * 2
         )
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code in (401, 403):
@@ -423,7 +423,7 @@ def run_harvest(anthropic_api_key):
                 pass
 
         new_conversations.append(conv)
-        if len(new_conversations) >= MAX_CONVERSATIONS_PER_RUN:
+        if len(new_conversations) >= limit:
             break
 
     result["conversations_scanned"] = len(new_conversations)
