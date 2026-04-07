@@ -3449,9 +3449,36 @@ def backfill_export():
     Runs synchronously. Call repeatedly to work through the full backlog.
     Returns: {mined, observations, cost_usd, remaining, status}
     """
-    import zipfile, glob
-    from conversation_harvester import extract_conversation_text, mine_conversation, add_to_inbox
+    import zipfile, glob, re as _re
+    from conversation_harvester import mine_conversation, add_to_inbox
     from conversation_harvester import load_harvest_state, save_harvest_state
+
+    def extract_export_text(conv, max_messages=80):
+        """Extract text from Claude.ai export format.
+        Export stores text nested in content[].text blocks, not a flat text field.
+        """
+        msgs = conv.get("chat_messages", [])
+        name = conv.get("name", "Untitled") or "Untitled"
+        created = conv.get("created_at", "")[:10]
+        lines = [f"# Conversation: {name} ({created})\n"]
+        msgs = sorted(msgs, key=lambda m: m.get("created_at", ""))[:max_messages]
+        for msg in msgs:
+            sender = msg.get("sender", "unknown")
+            prefix = "Human" if sender == "human" else "Claude"
+            text = msg.get("text", "") or ""
+            if not (isinstance(text, str) and text.strip()):
+                content = msg.get("content", []) or []
+                if isinstance(content, list):
+                    parts = [b.get("text","") for b in content if isinstance(b,dict) and b.get("type")=="text" and b.get("text","").strip()]
+                    text = "\n".join(parts)
+                elif isinstance(content, str):
+                    text = content
+            if sender == "assistant":
+                text = _re.sub(r'```\n.*?```', '[tool call]', text, flags=_re.DOTALL)
+                text = _re.sub(r'(\[tool call\]\s*)+', '[tool calls] ', text)
+            if text.strip():
+                lines.append(f"**{prefix}:** {text.strip()}\n")
+        return "\n".join(lines)
 
     body = request.get_json(silent=True) or {}
     limit = int(body.get('limit', 30))
@@ -3531,8 +3558,8 @@ def backfill_export():
         uuid = c.get('uuid', '')
         name = c.get('name', 'Untitled') or 'Untitled'
 
-        conv_text = extract_conversation_text(c)
-        if not conv_text.strip() or len(conv_text) < 100:
+        conv_text = extract_export_text(c)
+        if not conv_text.strip() or len(conv_text) < 150:
             processed.add(uuid)
             continue
 
