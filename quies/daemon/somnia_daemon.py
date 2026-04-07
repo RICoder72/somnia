@@ -1674,7 +1674,86 @@ def _build_processing_prompt(graph_stats, inbox_items):
         for node in unpinned_existing:
             context += f"- [{node['id']}] ({node['type']}) {node['content'][:100]}\n"
 
+    # Opportunistic SLTM sampling — probabilistic, connection-driven
+    sltm_sample = _sample_relevant_sltm(inbox_items)
+    if sltm_sample:
+        context += f"\n## Dormant Memories — Possibly Relevant\n\n"
+        context += (
+            "These memories faded from active recall but may connect to what you're "
+            "integrating now. While processing the inbox observations above, ask yourself: "
+            "does any of this dormant content deserve to come back? If so, create a new node "
+            "that references and builds on it — that's how it re-enters the active graph.\n\n"
+            "An honest empty pass is better than forced connections.\n\n"
+        )
+        for node in sltm_sample:
+            last_acc = node.get('last_accessed')
+            if hasattr(last_acc, 'strftime'):
+                last_acc = last_acc.strftime('%Y-%m-%d')
+            elif last_acc:
+                last_acc = str(last_acc)[:10]
+            else:
+                last_acc = 'never'
+            context += (f"- 🌫️ [{node['id']}] ({node['type']}) {node['content'][:120]} "
+                        f"[last={last_acc}, decay={node['decay_state']:.2f}]\n")
+
     return system_prompt + "\n\n" + context
+
+
+def _sample_relevant_sltm(inbox_items):
+    """
+    Probabilistically sample SLTM nodes topically relevant to current inbox items.
+    Returns a list of nodes, or empty list if skipped or none found.
+
+    Uses content keywords from inbox items to find dormant memories that may
+    deserve resurfacing — connection-driven archaeology during normal processing.
+    """
+    import re
+    sched = config.get('scheduler', {})
+    probability = sched.get('sltm_opportunistic_probability', 0.30)
+    limit = sched.get('sltm_opportunistic_limit', 8)
+
+    if not inbox_items:
+        return []
+
+    import random
+    if random.random() > probability:
+        return []  # skip this cycle
+
+    # Extract significant keywords from inbox content
+    stopwords = {
+        'about', 'after', 'also', 'been', 'before', 'being', 'between',
+        'could', 'does', 'during', 'every', 'from', 'have', 'having',
+        'into', 'just', 'like', 'more', 'most', 'needed', 'other',
+        'over', 'should', 'since', 'some', 'such', 'than', 'that',
+        'their', 'them', 'then', 'there', 'these', 'they', 'this',
+        'through', 'under', 'using', 'very', 'when', 'where', 'which',
+        'while', 'will', 'with', 'would', 'your'
+    }
+    word_freq = {}
+    for item in inbox_items:
+        words = re.findall(r'\b[a-zA-Z]{5,}\b', item.get('content', '').lower())
+        for w in words:
+            if w not in stopwords:
+                word_freq[w] = word_freq.get(w, 0) + 1
+
+    if not word_freq:
+        return []
+
+    # Take top keywords by frequency
+    keywords = [w for w, _ in sorted(word_freq.items(), key=lambda x: -x[1])[:12]]
+
+    # Build ILIKE conditions
+    conditions = " OR ".join([f"content ILIKE %s" for _ in keywords])
+    params = [f'%{kw}%' for kw in keywords] + [limit]
+
+    rows = execute(
+        f"SELECT id, type, content, decay_state, last_accessed "
+        f"FROM nodes WHERE memory_layer = 'sltm' AND ({conditions}) "
+        f"ORDER BY last_accessed ASC NULLS FIRST LIMIT %s",
+        params, fetch='all'
+    ) or []
+
+    return rows
 
 
 def _build_rumination_prompt(graph_stats):
