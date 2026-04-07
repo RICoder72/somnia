@@ -34,9 +34,9 @@ API_BASE = "http://localhost:8010"
 
 # Filesystem roots — these are the canonical paths inside the container,
 # which map to the shared /data volume accessible by all Constellation services.
-DATA_ROOT      = Path("/data")
-DOCUMENTS_ROOT = DATA_ROOT / "documents"
-OUTPUTS_ROOT   = DATA_ROOT / "outputs"
+DATA_ROOT       = Path("/data")
+WORKSPACES_ROOT = DATA_ROOT / "workspaces"
+OUTPUTS_ROOT    = DATA_ROOT / "outputs"
 SOLO_WORK_DIR  = DATA_ROOT / "somnia" / "solo-work"
 MANIFEST_PATH  = OUTPUTS_ROOT / "portal-manifest.json"
 
@@ -196,7 +196,7 @@ def _build_manifest(source: str = "somnia_provision") -> dict:
             "needs_store": props.get("needs_store", False),
             "store_ready": props.get("store_ready", False),
             "provisioned": True,
-            "docs_path": props.get("docs_path", f"documents/{p.get('id','')}"),
+            "docs_path": props.get("docs_path", f"workspaces/{p.get('id','')}"),
             "store_domain": props.get("store_domain", ""),
             "last_activity": (p.get("last_touched") or now)[:10],
             "last_provisioned": props.get("last_provisioned", ""),
@@ -482,8 +482,8 @@ def somnia_provision(
 
     What it does:
       1. Verifies the node is pinned in the graph
-      2. Creates documents/{slug}/ if missing (skipped if has_collab_space=False)
-      3. Writes documents/{slug}/README.md if missing (skipped if has_collab_space=False)
+      2. Creates workspaces/{slug}/ if missing (skipped if has_collab_space=False)
+      3. Writes workspaces/{slug}/README.md if missing (skipped if has_collab_space=False)
       4. Updates the node's properties: provisioned, docs_path, portal_visible,
          has_collab_space, needs_store, icon, name, description, last_provisioned
       5. Regenerates outputs/portal-manifest.json
@@ -532,16 +532,16 @@ def somnia_provision(
     display_name = name or id.replace("-", " ").title()
     desc_line = description or node.get("summary", "")
 
-    # ── Create documents/{id}/ and README (only if has_collab_space) ──
+    # ── Create workspaces/{id}/ and README (only if has_collab_space) ──
     if has_collab_space:
-        docs_path = DOCUMENTS_ROOT / id
+        docs_path = WORKSPACES_ROOT / id
         try:
             docs_path.mkdir(parents=True, exist_ok=True)
-            steps.append(f"✅ documents/{id}/ — ready")
+            steps.append(f"✅ workspaces/{id}/ — ready")
         except PermissionError as e:
             steps.append(
-                f"⚠️  documents/{id}/ — permission error: {e}\n"
-                f"   Workaround: create via Vigil fs_mkdir /data/documents/{id}"
+                f"⚠️  workspaces/{id}/ — permission error: {e}\n"
+                f"   Workaround: create via Vigil fs_mkdir /data/workspaces/{id}"
             )
 
         readme_path = docs_path / "README.md"
@@ -557,14 +557,14 @@ def somnia_provision(
                     f"_Provisioned: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}_\n"
                 )
                 readme_path.write_text(readme_content, encoding="utf-8")
-                steps.append(f"✅ documents/{id}/README.md — written")
+                steps.append(f"✅ workspaces/{id}/README.md — written")
             except PermissionError as e:
                 steps.append(
-                    f"⚠️  documents/{id}/README.md — permission error: {e}\n"
-                    f"   Workaround: create via Vigil fs_write /data/documents/{id}/README.md"
+                    f"⚠️  workspaces/{id}/README.md — permission error: {e}\n"
+                    f"   Workaround: create via Vigil fs_write /data/workspaces/{id}/README.md"
                 )
         else:
-            steps.append(f"ℹ️  documents/{id}/README.md — already exists, skipped")
+            steps.append(f"ℹ️  workspaces/{id}/README.md — already exists, skipped")
     else:
         steps.append(f"ℹ️  has_collab_space=False — skipping filesystem provisioning")
 
@@ -576,7 +576,7 @@ def somnia_provision(
         "has_collab_space": has_collab_space,
         "needs_store": needs_store,
         "store_ready": False,   # Must be confirmed separately via Vigil store tools
-        "docs_path": f"documents/{id}",
+        "docs_path": f"workspaces/{id}",
         "store_domain": id if needs_store else "",
         "icon": icon,
         "name": display_name,

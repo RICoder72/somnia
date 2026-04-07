@@ -38,10 +38,9 @@ import httpx
 app = FastAPI(title="Somnia Portal")
 
 # Filesystem roots
-DATA_ROOT      = Path("/data")
-DOCUMENTS_ROOT = DATA_ROOT / "documents"
-DOMAINS_ROOT   = DATA_ROOT / "domains"
-OUTPUTS_ROOT   = DATA_ROOT / "outputs"
+DATA_ROOT       = Path("/data")
+WORKSPACES_ROOT = DATA_ROOT / "workspaces"
+OUTPUTS_ROOT    = DATA_ROOT / "outputs"
 MANIFEST_PATH  = OUTPUTS_ROOT / "portal-manifest.json"
 
 CONFIG_FILE    = Path("/data/config/portal.json")
@@ -96,7 +95,7 @@ def get_domain_info(domain: str) -> dict:
                 "label": node.get("name", node["id"].replace("-", " ").title()),
                 "icon": node.get("icon", "📁"),
                 "description": node.get("description", ""),
-                "docs_path": node.get("docs_path", f"documents/{domain}"),
+                "docs_path": node.get("docs_path", f"workspaces/{domain}"),
                 "needs_store": node.get("needs_store", False),
                 "has_collab_space": node.get("has_collab_space", True),
                 "status": node.get("status", ""),
@@ -106,7 +105,7 @@ def get_domain_info(domain: str) -> dict:
         config = json.loads(CONFIG_FILE.read_text())
         for d in config.get("exposed_domains", []):
             if d["id"] == domain:
-                return {**d, "label": d.get("label", d["id"]), "docs_path": f"documents/{domain}", "has_collab_space": True}
+                return {**d, "label": d.get("label", d["id"]), "docs_path": f"workspaces/{domain}", "has_collab_space": True}
     except Exception:
         pass
     raise HTTPException(404, f"Domain '{domain}' not found")
@@ -780,7 +779,7 @@ async def file_browser_page(domain: str):
 @app.get("/portal/api/files/{domain}")
 async def api_list_files(domain: str, path: str = Query("")):
     info = get_domain_info(domain)
-    docs = DOCUMENTS_ROOT / domain
+    docs = WORKSPACES_ROOT / domain
     docs.mkdir(parents=True, exist_ok=True)
     target = safe_resolve(docs, path)
     if not target.exists():
@@ -803,7 +802,7 @@ async def api_list_files(domain: str, path: str = Query("")):
 @app.get("/portal/api/download/{domain}")
 async def api_download(domain: str, path: str = Query(...)):
     info = get_domain_info(domain)
-    docs = DOCUMENTS_ROOT / domain
+    docs = WORKSPACES_ROOT / domain
     target = safe_resolve(docs, path)
     if not target.is_file():
         raise HTTPException(404, "File not found")
@@ -814,7 +813,7 @@ async def api_download(domain: str, path: str = Query(...)):
 @app.get("/portal/files/{domain}/view", response_class=HTMLResponse)
 async def view_file(domain: str, path: str = Query(...)):
     info = get_domain_info(domain)
-    docs = DOCUMENTS_ROOT / domain
+    docs = WORKSPACES_ROOT / domain
     target = safe_resolve(docs, path)
     if not target.is_file():
         raise HTTPException(404, "File not found")
@@ -908,7 +907,7 @@ async def api_upload(domain: str, file: UploadFile = File(...), path: str = Quer
     ext = Path(file.filename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, f"File type '{ext}' not permitted")
-    docs = DOCUMENTS_ROOT / domain
+    docs = WORKSPACES_ROOT / domain
     dest_dir = safe_resolve(docs, path)
     if not dest_dir.is_dir():
         raise HTTPException(400, "Target path is not a directory")
@@ -971,7 +970,7 @@ async def reports_page(domain: str):
 @app.get("/portal/reports/{domain}/view", response_class=HTMLResponse)
 async def view_report(domain: str, file: str = Query(...)):
     info = get_domain_info(domain)
-    rdir = DOCUMENTS_ROOT / domain / "reports"
+    rdir = WORKSPACES_ROOT / domain / "reports"
     target = safe_resolve(rdir, file)
     if not target.is_file() or target.suffix not in (".html", ".htm"):
         raise HTTPException(404, "Report not found")
@@ -981,7 +980,7 @@ async def view_report(domain: str, file: str = Query(...)):
 @app.get("/portal/api/reports/{domain}")
 async def api_list_reports(domain: str):
     info = get_domain_info(domain)
-    rdir = DOCUMENTS_ROOT / domain / "reports"
+    rdir = WORKSPACES_ROOT / domain / "reports"
     rdir.mkdir(parents=True, exist_ok=True)
     reports = []
     for f in sorted(rdir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
