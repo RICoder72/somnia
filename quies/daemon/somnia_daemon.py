@@ -2142,7 +2142,7 @@ def _refresh_portal_manifest(dream_id=None):
                 "needs_store": meta.get('needs_store', False),
                 "store_ready": meta.get('store_ready', False),
                 "provisioned": True,
-                "docs_path": meta.get('docs_path', f"documents/{row['id']}"),
+                "docs_path": meta.get('docs_path', f"workspaces/{row['id']}"),
                 "store_domain": meta.get('store_domain', ''),
                 "last_activity": last_accessed.strftime("%Y-%m-%d") if last_accessed else "",
                 "last_provisioned": meta.get('last_provisioned', ''),
@@ -3560,6 +3560,7 @@ def backfill_export():
 
         conv_text = extract_export_text(c)
         if not conv_text.strip() or len(conv_text) < 150:
+            app.logger.info(f"backfill skip (short {len(conv_text)} chars): '{name[:40]}'")
             processed.add(uuid)
             continue
 
