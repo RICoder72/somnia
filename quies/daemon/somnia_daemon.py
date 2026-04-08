@@ -1708,7 +1708,7 @@ def _sample_relevant_sltm(inbox_items):
     deserve resurfacing — connection-driven archaeology during normal processing.
     """
     import re
-    sched = config.get('scheduler', {})
+    sched = CONFIG.get('scheduler', {})
     probability = sched.get('sltm_opportunistic_probability', 0.30)
     limit = sched.get('sltm_opportunistic_limit', 8)
 
