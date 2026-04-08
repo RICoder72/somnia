@@ -623,6 +623,7 @@ def somnia_provision(
 def somnia_dream(
     mode: str = "process",
     force: bool = False,
+    budget_override: float = None,
 ) -> str:
     """
     Trigger a Somnia dream cycle.
@@ -640,8 +641,10 @@ def somnia_dream(
     waits for completion and returns a summary.
 
     Args:
-        mode:  Dream mode — process | ruminate | solo_work
-        force: Bypass readiness checks (default False)
+        mode:            Dream mode — process | ruminate | solo_work
+        force:           Bypass readiness checks (default False)
+        budget_override: Optional USD cost cap for this dream (overrides config default).
+                         Useful for one-off expensive sessions without changing config.
     """
     valid_modes = ("process", "ruminate", "solo_work")
     if mode not in valid_modes:
@@ -650,6 +653,8 @@ def somnia_dream(
     _record_activity("dream_trigger", {"mode": mode, "force": force})
 
     payload = {"mode": mode, "force": force}
+    if budget_override is not None:
+        payload["budget_override"] = budget_override
 
     try:
         resp = requests.post(

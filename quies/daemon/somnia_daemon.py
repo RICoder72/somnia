@@ -3,7 +3,6 @@
 Somnia Daemon
 
 HTTP server that orchestrates Claude's dream cycles.
-Shells out to Claude Code CLI for actual consolidation work.
 Includes background dream scheduler with rumination support.
 
 PostgreSQL backend via daemon/db.py.
@@ -14,6 +13,7 @@ import sys
 import json
 import re
 import subprocess
+import anthropic
 import uuid
 import threading
 import time
@@ -1223,41 +1223,69 @@ what you investigated, produce a minimal honest entry. Output exactly ONE JSON b
 }}
 ```"""
 
-    auth_type, token = get_claude_auth()
-    if not token:
+    api_key = get_api_key()
+    if not api_key:
         return None
 
-    env = {**os.environ}
-    if auth_type == 'oauth':
-        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-    else:
-        env["ANTHROPIC_API_KEY"] = token
-
     try:
-        result = subprocess.run(
-            ["claude", "-p", recovery_prompt, "--output-format", "json",
-             "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
-             "--max-turns", "1"],
-            capture_output=True, text=True, timeout=120, env=env
+        model = CONFIG['api'].get('model', 'claude-sonnet-4-20250514')
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=2048,
+            messages=[{"role": "user", "content": recovery_prompt}],
         )
-        if result.returncode != 0:
-            logger.error(f"Solo-work recovery CLI failed: {result.stderr[:200]}")
-            return None
-
-        try:
-            recovery_output = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            recovery_output = {"raw": result.stdout}
-
-        return extract_json_from_output(recovery_output)
+        result_text = response.content[0].text if response.content else ""
+        return extract_json_from_output({"result": result_text})
 
     except Exception as e:
         logger.error(f"Solo-work recovery exception: {e}")
         return None
 
 
-def run_consolidation(dry_run=False, mode='process'):
-    """Run a consolidation cycle by shelling out to Claude Code CLI."""
+
+def _get_max_tokens_for_mode(mode: str) -> int:
+    """Return max_tokens for a given dream mode.
+    
+    Values can be overridden in config.yaml under api.max_tokens_per_mode.
+    Defaults match the per-mode output requirements:
+      process/solo_work need room for full operations JSON;
+      ruminate/archaeologize produce focused, shorter output.
+    """
+    defaults = {
+        'process':       16000,
+        'ruminate':       8000,
+        'solo_work':     16000,
+        'archaeologize':  4000,
+    }
+    per_mode = CONFIG.get('api', {}).get('max_tokens_per_mode', {})
+    return per_mode.get(mode, defaults.get(mode, 8000))
+
+
+def _calculate_cost(usage: dict, model: str) -> float:
+    """Estimate USD cost from a usage dict {input_tokens, output_tokens}.
+    
+    Uses published Anthropic pricing.  Returns 0.0 on any error — cost
+    estimation should never crash the dream cycle.
+    """
+    # USD per million tokens: (input_cost, output_cost)
+    _PRICING = {
+        'claude-sonnet-4-20250514':    (3.00, 15.00),
+        'claude-opus-4-6':             (15.00, 75.00),
+        'claude-haiku-4-5-20251001':   (0.25,  1.25),
+    }
+    try:
+        in_cost, out_cost = _PRICING.get(model, (3.00, 15.00))
+        return (
+            usage.get('input_tokens', 0) * in_cost +
+            usage.get('output_tokens', 0) * out_cost
+        ) / 1_000_000
+    except Exception:
+        return 0.0
+
+
+def run_consolidation(dry_run=False, mode='process', budget_override=None):
+    """Run a consolidation cycle via the Anthropic Python SDK."""
     dream_id = str(uuid.uuid4())
     started_at = datetime.now().isoformat()
     graph_stats_before = get_graph_stats()
@@ -1278,99 +1306,52 @@ def run_consolidation(dry_run=False, mode='process'):
             "graph_stats": graph_stats_before
         }
 
-    auth_type, token = get_claude_auth()
-    if not token:
+    api_key = get_api_key()
+    if not api_key:
         return {"error": "No authentication configured."}
 
-    env = {**os.environ}
-    if auth_type == 'oauth':
-        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-    else:
-        env["ANTHROPIC_API_KEY"] = token
+    model = CONFIG['api'].get('model', 'claude-sonnet-4-20250514')
+    max_tokens = _get_max_tokens_for_mode(mode)
+    if budget_override is not None:
+        # budget_override is a USD cap; translate to a generous token ceiling.
+        # At Sonnet output pricing ($15/MTok), $1 ≈ 66 k tokens.  Cap at 64 k.
+        cost_per_output_token = 15.0 / 1_000_000
+        token_budget = int(budget_override / cost_per_output_token)
+        max_tokens = min(max(max_tokens, token_budget), 64000)
 
     try:
-        max_turns = "20" if mode == 'solo_work' else "10"
-        timeout_seconds = 1200 if mode == 'solo_work' else 600
-        # Pass prompt via stdin (input=) rather than as a -p argv argument.
-        # The graph grows over time; large rumination prompts (149+ nodes, 800+ edges)
-        # exceed Linux ARG_MAX when passed on the command line, causing E2BIG / OSError 7.
-        # subprocess.run(input=...) pipes through stdin — no argv size limit.
-        # Claude Code detects non-TTY stdin and runs non-interactively.
-        # Note: Do NOT use --print with --output-format json — causes empty result field
-        # when extended thinking is active (confirmed via cli-test debugging).
-        cmd = ["claude", "--output-format", "json",
-               "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
-               "--max-turns", max_turns]
-        # Enable web research for solo-work sessions
-        # --allowedTools in non-interactive mode auto-approves listed tools.
-        if mode == 'solo_work':
-            cmd.extend(["--allowedTools", "WebSearch", "WebFetch",
-                         "Read", "Grep", "Glob", "Bash", "Edit"])
-        result = subprocess.run(
-            cmd, input=full_prompt,
-            capture_output=True, text=True, timeout=timeout_seconds, env=env
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": full_prompt}],
         )
 
         ended_at = datetime.now().isoformat()
         duration_seconds = (datetime.fromisoformat(ended_at) -
                             datetime.fromisoformat(started_at)).seconds
 
-        if result.returncode != 0:
-            execute("""
-                INSERT INTO dream_log (id, started_at, ended_at, interrupted, summary)
-                VALUES (%s, %s, %s, TRUE, %s)
-            """, (dream_id, started_at, ended_at,
-                  f"[{mode}] CLI error: {result.stderr[:500]}"))
+        result_text = response.content[0].text if response.content else ""
+        output = {
+            "result": result_text,
+            "usage": {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            },
+            "subtype": "error_max_tokens" if response.stop_reason == "max_tokens" else "",
+            "num_turns": 1,
+            "stop_reason": response.stop_reason,
+        }
 
-            log_diagnostics(dream_id, graph_stats_before,
-                            exit_code=result.returncode,
-                            duration_ms=duration_seconds * 1000,
-                            notes=f"[{mode}] CLI failed: {result.stderr[:200]}")
-
-            log_event('error', mode.replace('process', 'dream'),
-                      f'CLI exited with code {result.returncode}',
-                      {'exit_code': result.returncode,
-                       'stderr': result.stderr[:500],
-                       'duration_seconds': duration_seconds},
-                      dream_id=dream_id)
-
-            return {"dream_id": dream_id, "error": "Claude CLI failed",
-                    "mode": mode, "stderr": result.stderr}
-
-        try:
-            output = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            output = {"raw": result.stdout}
-
-        # Retry once if result is empty but tokens were consumed (intermittent CLI issue)
-        result_text = output.get('result', '') if isinstance(output, dict) else ''
-        output_tokens = (output.get('usage', {}).get('output_tokens', 0)
-                         if isinstance(output, dict) else 0)
-        if not result_text.strip() and output_tokens > 100:
-            logger.warning(
-                f"[{mode}] Empty result with {output_tokens} output tokens — retrying once")
-            log_event('warning', mode.replace('process', 'dream'),
-                      f'Empty result with {output_tokens} tokens, retrying',
-                      {'output_tokens': output_tokens, 'attempt': 1},
-                      dream_id=dream_id)
-            try:
-                retry_result = subprocess.run(
-                    cmd, input=full_prompt, capture_output=True, text=True,
-                    timeout=timeout_seconds, env=env)
-                if retry_result.returncode == 0:
-                    try:
-                        retry_output = json.loads(retry_result.stdout)
-                    except json.JSONDecodeError:
-                        retry_output = {"raw": retry_result.stdout}
-                    retry_text = retry_output.get('result', '') if isinstance(retry_output, dict) else ''
-                    if retry_text.strip():
-                        logger.info(f"[{mode}] Retry succeeded — {len(retry_text)} chars")
-                        output = retry_output
-                        ended_at = datetime.now().isoformat()
-                        duration_seconds = (datetime.fromisoformat(ended_at) -
-                                            datetime.fromisoformat(started_at)).seconds
-            except Exception as retry_err:
-                logger.warning(f"[{mode}] Retry failed: {retry_err}")
+        # Log cost for budget tracking
+        cost_usd = _calculate_cost(output["usage"], model)
+        log_event('info', mode.replace('process', 'dream'),
+                  f'SDK call complete: {response.stop_reason}',
+                  {'input_tokens': response.usage.input_tokens,
+                   'output_tokens': response.usage.output_tokens,
+                   'cost_usd': round(cost_usd, 6),
+                   'stop_reason': response.stop_reason},
+                  dream_id=dream_id)
 
         dream_ops = extract_json_from_output(output)
 
@@ -1564,21 +1545,23 @@ def run_consolidation(dry_run=False, mode='process'):
             "summary": summary, "reflections": reflections
         }
 
-    except subprocess.TimeoutExpired:
+    except anthropic.APITimeoutError:
         ended_at = datetime.now().isoformat()
         execute("""
             INSERT INTO dream_log (id, started_at, ended_at, interrupted, summary)
             VALUES (%s, %s, %s, TRUE, %s)
         """, (dream_id, started_at, ended_at,
-              f'[{mode}] Timed out after 600 seconds'))
+              f'[{mode}] SDK timeout'))
         log_event('error', mode.replace('process', 'dream'),
-                  f'{mode} timed out',
-                  {'timeout_seconds': 1200 if mode == 'solo_work' else 600},
+                  f'{mode} timed out (SDK)',
+                  {'mode': mode},
                   dream_id=dream_id)
         return {"dream_id": dream_id, "error": "Timed out", "interrupted": True}
-    except FileNotFoundError:
-        log_event('error', 'scheduler', 'Claude CLI not found — is it installed?')
-        return {"dream_id": dream_id, "error": "Claude CLI not found"}
+    except anthropic.APIError as e:
+        log_event('error', mode.replace('process', 'dream'),
+                  f'Anthropic API error in {mode}: {e}',
+                  {'exception_type': type(e).__name__}, dream_id=dream_id)
+        return {"dream_id": dream_id, "error": f"API error: {e}"}
     except Exception as e:
         log_event('error', mode.replace('process', 'dream'),
                   f'Unhandled exception in {mode}: {e}',
@@ -2532,43 +2515,6 @@ def dream_scheduler():
                                  f"ruminating={rum_reason}, solo={solo_reason}, "
                                  f"archaeology={arch_reason})")
 
-                # Phase 5: Conversation harvest — runs once daily
-                try:
-                    from conversation_harvester import should_harvest, run_harvest
-                    can_harv, harv_reason = should_harvest()
-                    if can_harv:
-                        logger.info(f"Scheduler: starting conversation harvest ({harv_reason})")
-                        log_event("info", "scheduler", "Starting conversation harvest",
-                                  {"reason": harv_reason})
-                        api_key = get_api_key()
-                        if not api_key:
-                            logger.warning("Harvester: no API key available, skipping")
-                        else:
-                            harv_result = run_harvest(api_key)
-                            status = harv_result.get("status", "unknown")
-                            if status in ("session_expired", "auth_error"):
-                                log_event("warning", "harvest",
-                                          f"Harvest skipped: {harv_result.get("error")}",
-                                          {"nudge": "Refresh Claude AI Session Key in 1Password"})
-                                logger.warning(f"Harvester: {harv_result.get("error")}")
-                            elif status == "error":
-                                log_event("error", "harvest",
-                                          f"Harvest failed: {harv_result.get("error")}")
-                            else:
-                                obs = harv_result.get("observations_added", 0)
-                                mined = harv_result.get("conversations_mined", 0)
-                                log_event("info", "harvest", "Conversation harvest complete", {
-                                    "conversations_mined": mined,
-                                    "observations_added": obs,
-                                    "conversations_scanned": harv_result.get("conversations_scanned", 0)
-                                })
-                                logger.info(
-                                    f"Scheduler: harvest complete — "
-                                    f"{mined} conversations mined, {obs} observations added")
-                except ImportError:
-                    pass
-                except Exception as e_harv:
-                    logger.error(f"Harvester phase error: {e_harv}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Scheduler error: {e}", exc_info=True)
@@ -2757,6 +2703,7 @@ def consolidate():
     force = data.get("force", False)
     dry_run = data.get("dry_run", False)
     mode = data.get("mode", "process")
+    budget_override = data.get("budget_override")
 
     if not force:
         if mode == 'ruminate':
@@ -2772,7 +2719,7 @@ def consolidate():
             if not can:
                 return jsonify({"error": "Not ready to dream", "reason": reason}), 400
 
-    result = run_consolidation(dry_run=dry_run, mode=mode)
+    result = run_consolidation(dry_run=dry_run, mode=mode, budget_override=budget_override)
     if "error" in result:
         return jsonify(result), 500
     return jsonify(result)
