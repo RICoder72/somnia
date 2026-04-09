@@ -75,7 +75,7 @@ services:
       - ${SOMNIA_REPOS_DIR:-./}:/data/repos
       - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs
       - ${SOMNIA_RUNTIME_DIR:-./runtime}:/data/runtime
-      - publish-data:/data/publish
+      - ${SOMNIA_DATA_ROOT:-/volume1/docker/somnia}/publish:/data/publish
     environment:
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
       CREDENTIALS_API_KEY: ${CREDENTIALS_API_KEY:-}
@@ -122,7 +122,7 @@ services:
       - ${SOMNIA_DATA_ROOT:-/volume1/docker/somnia}/outputs:/outputs
       - ${SOMNIA_DATA_ROOT:-/volume1/docker/somnia}/repos:/repos
       - ${SOMNIA_WORKSPACES_DIR:-./workspaces}:/data/workspaces:ro
-      - publish-data:/data/publish
+      - ${SOMNIA_DATA_ROOT:-/volume1/docker/somnia}/publish:/data/publish
     networks:
       - mcp-net
     healthcheck:
@@ -147,7 +147,7 @@ services:
       - ${SOMNIA_WORKSPACES_DIR:-./workspaces}:/data/workspaces
       # Portal reads portal-manifest.json from /data/outputs/
       - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs:ro
-      - publish-data:/data/publish:ro
+      - ${SOMNIA_DATA_ROOT:-/volume1/docker/somnia}/publish:/data/publish:ro
     environment:
       PORTAL_DB_URL: "postgresql://${POSTGRES_USER:-somnia}:${POSTGRES_PASSWORD}@somnia-postgres:5432/somnia"
     networks:
@@ -203,7 +203,6 @@ services:
 volumes:
   pgdata:
   quies-data:
-  publish-data:
 
 networks:
   mcp-net:
