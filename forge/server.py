@@ -16,6 +16,8 @@ Tools:
 from fastmcp import FastMCP
 import subprocess
 from pathlib import Path
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 WORKSPACE   = Path("/workspace")   # persistent scratch; survives restarts
@@ -216,6 +218,33 @@ def env_info() -> str:
 
 
 # ── Entry point ────────────────────────────────────────────────────────────
+
+@mcp.custom_route("/forge/internal/run", methods=["POST"])
+async def internal_run(request: Request) -> JSONResponse:
+    """Internal REST endpoint for Vigil's publish_md_as_pdf bridge.
+
+    Accepts: {"command": "...", "workdir": "/workspace", "timeout": 120}
+    Returns: {"output": "...", "ok": bool}
+
+    Not exposed through the router — only reachable on mcp-net.
+    No auth: caller must be on mcp-net (Vigil is the only caller).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "output": "invalid JSON body"}, status_code=400)
+
+    command  = body.get("command", "")
+    workdir  = body.get("workdir", "/workspace")
+    timeout  = int(body.get("timeout", 120))
+
+    if not command:
+        return JSONResponse({"ok": False, "output": "no command"}, status_code=400)
+
+    output = _run(command, cwd=workdir, timeout=timeout)
+    ok = not output.startswith("[exit") and not output.startswith("[timeout") and not output.startswith("[error")
+    return JSONResponse({"output": output, "ok": ok})
+
 
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=8003, path="/forge")

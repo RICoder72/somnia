@@ -21,6 +21,7 @@ from tools.git import register as register_git
 from tools.shell import register as register_shell
 from tools.context import register as register_context
 from tools.publishing import register as register_publishing
+from tools.shares import register as register_shares
 from tools.dashboard import register as register_dashboard
 from tools.session import register as register_session
 
@@ -49,6 +50,7 @@ register_git(mcp)
 register_shell(mcp)
 register_context(mcp)
 register_publishing(mcp)
+register_shares(mcp)
 register_dashboard(mcp)
 register_session(mcp)
 

@@ -26,12 +26,13 @@ Manifest schema v1.1 additions:
 """
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import mimetypes
 import os
+import re
 import asyncpg
 import httpx
 
@@ -42,6 +43,15 @@ DATA_ROOT       = Path("/data")
 WORKSPACES_ROOT = DATA_ROOT / "workspaces"
 OUTPUTS_ROOT    = DATA_ROOT / "outputs"
 MANIFEST_PATH  = OUTPUTS_ROOT / "portal-manifest.json"
+
+# Share publish system (public /p/{uuid} route)
+PUBLISH_ROOT = Path("/data/publish")
+SHARES_FILE  = PUBLISH_ROOT / "_shares.json"
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 CONFIG_FILE    = Path("/data/config/portal.json")
 QUERIES_FILE   = Path("/data/config/portal-queries.json")
@@ -893,7 +903,6 @@ async def view_file(domain: str, path: str = Query(...)):
         return html_shell(target.name, body)
 
     mime, _ = mimetypes.guess_type(str(target))
-    from starlette.responses import Response
     return Response(
         content=target.read_bytes(),
         media_type=mime or "application/octet-stream",
@@ -1129,6 +1138,144 @@ async def api_run_query(domain: str, query_id: str = Query(...)):
         return {"columns": columns, "rows": result, "elapsed_ms": elapsed}
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+# ---------------------------------------------------------------------------
+# Public share links — GET /p/{uuid}  (no auth — UUID is the credential)
+# ---------------------------------------------------------------------------
+
+def _load_shares_manifest() -> dict:
+    try:
+        return json.loads(SHARES_FILE.read_text())
+    except Exception:
+        return {"version": 1, "shares": {}}
+
+
+def share_shell(title: str, body: str) -> str:
+    """Minimal HTML shell for public share pages — no portal nav, no auth links."""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title}</title>
+  <style>{STYLES}
+  .share-hero {{
+    max-width: 520px; margin: 80px auto; text-align: center; padding: 0 24px;
+  }}
+  .share-hero-icon {{ font-size: 52px; margin-bottom: 16px; line-height: 1; }}
+  .share-hero h1 {{ font-size: 22px; font-weight: 600; margin-bottom: 12px; }}
+  .share-hero p {{ color: var(--muted); font-size: 14px; line-height: 1.7; }}
+  .share-footer {{
+    position: fixed; bottom: 20px; width: 100%; text-align: center;
+    font-size: 11px; color: #30363d; font-family: var(--mono);
+    pointer-events: none;
+  }}
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-logo">✦ somnia</div>
+  </div>
+  {body}
+  <div class="share-footer">share link · somnia</div>
+</body>
+</html>"""
+
+
+@app.get("/p/{uuid}")
+async def serve_share(uuid: str):
+    """Public share endpoint — UUID is the credential. No auth required.
+
+    Returns the file with the correct Content-Type if the share is valid and
+    not expired. Returns styled error pages (not bare HTTP errors) otherwise.
+    """
+    # ── 1. Validate UUID format ────────────────────────────────────────────
+    if not _UUID_RE.match(uuid):
+        body = """
+  <div class="share-hero">
+    <div class="share-hero-icon">🔍</div>
+    <h1>Invalid link</h1>
+    <p>This doesn't look like a valid Somnia share link.</p>
+  </div>"""
+        return HTMLResponse(share_shell("Invalid link — Somnia", body), status_code=400)
+
+    # ── 2. Look up share entry ─────────────────────────────────────────────
+    shares = _load_shares_manifest().get("shares", {})
+    entry  = shares.get(uuid.lower()) or shares.get(uuid)
+
+    if not entry:
+        body = """
+  <div class="share-hero">
+    <div class="share-hero-icon">🔍</div>
+    <h1>Link not found</h1>
+    <p>This share link doesn't exist or has been revoked.<br>
+    If someone sent you this link, ask them to generate a fresh one.</p>
+  </div>"""
+        return HTMLResponse(share_shell("Not found — Somnia", body), status_code=404)
+
+    # ── 3. Check expiry ────────────────────────────────────────────────────
+    try:
+        expires_at = datetime.fromisoformat(entry["expires_at"])
+        if expires_at < datetime.now(timezone.utc):
+            expired_date = entry.get("expires_at", "")[:10]
+            fname = entry.get("filename", "this file")
+            body = f"""
+  <div class="share-hero">
+    <div class="share-hero-icon">⌛</div>
+    <h1>This link has expired</h1>
+    <p>The share for <strong>{fname}</strong> expired on {expired_date}.<br>
+    Contact the person who shared it with you to get a new link.</p>
+  </div>"""
+            return HTMLResponse(share_shell("Expired — Somnia", body), status_code=410)
+    except Exception:
+        pass  # malformed expiry — treat as non-expired, let the file check decide
+
+    # ── 4. Resolve and verify file on disk ─────────────────────────────────
+    rel_path  = entry.get("path", "")
+    file_path = (PUBLISH_ROOT / rel_path).resolve()
+
+    # Path traversal guard
+    if not str(file_path).startswith(str(PUBLISH_ROOT.resolve())):
+        return HTMLResponse(
+            share_shell("Error — Somnia", '<div class="share-hero"><div class="share-hero-icon">⚠</div><h1>Error</h1><p>Invalid share path.</p></div>'),
+            status_code=500,
+        )
+
+    if not file_path.exists() or not file_path.is_file():
+        body = f"""
+  <div class="share-hero">
+    <div class="share-hero-icon">⚠</div>
+    <h1>File unavailable</h1>
+    <p>The link is valid, but the underlying file could not be found on the server.<br>
+    The file may have been moved or deleted — contact the person who shared it.</p>
+  </div>"""
+        return HTMLResponse(share_shell("Unavailable — Somnia", body), status_code=410)
+
+    # ── 5. Serve ───────────────────────────────────────────────────────────
+    content_type = (
+        entry.get("content_type")
+        or mimetypes.guess_type(str(file_path))[0]
+        or "application/octet-stream"
+    )
+    filename = entry.get("filename", file_path.name)
+
+    # Inline types render in browser; everything else triggers download
+    _INLINE_TYPES = {
+        "application/pdf", "text/html", "text/plain",
+        "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
+    }
+    disposition = (
+        "inline"
+        if content_type in _INLINE_TYPES
+        else f'attachment; filename="{filename}"'
+    )
+
+    return Response(
+        content=file_path.read_bytes(),
+        media_type=content_type,
+        headers={"Content-Disposition": disposition},
+    )
 
 
 # ---------------------------------------------------------------------------
