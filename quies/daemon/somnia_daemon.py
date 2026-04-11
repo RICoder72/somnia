@@ -1312,12 +1312,13 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
 
     model = CONFIG['api'].get('model', 'claude-sonnet-4-20250514')
     max_tokens = _get_max_tokens_for_mode(mode)
-    if budget_override is not None:
-        # budget_override is a USD cap; translate to a generous token ceiling.
-        # At Sonnet output pricing ($15/MTok), $1 ≈ 66 k tokens.  Cap at 64 k.
-        cost_per_output_token = 15.0 / 1_000_000
-        token_budget = int(budget_override / cost_per_output_token)
-        max_tokens = min(max(max_tokens, token_budget), 64000)
+    # Note: budget_override is intentionally NOT used here to fudge max_tokens.
+    # The previous implementation translated USD → output token cap, which
+    # (a) ignored input cost — the dominant cost for inbox processing — and
+    # (b) saturated at ~$0.96 due to a 64k hard cap. Real spend gating now
+    # happens in run_dream_session(), which loops this function and tracks
+    # accumulated cost from actual usage. budget_override is accepted here
+    # only for backward-compatible API signatures and is otherwise ignored.
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
@@ -1345,6 +1346,11 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
 
         # Log cost for budget tracking
         cost_usd = _calculate_cost(output["usage"], model)
+        # Stash cost in output dict so log_diagnostics() can pick it up via
+        # its existing total_cost_usd lookup path. This was the missing piece
+        # after the Claude Code CLI → SDK migration: the CLI used to emit
+        # total_cost_usd at the top level of its JSON output; the SDK does not.
+        output["total_cost_usd"] = cost_usd
         log_event('info', mode.replace('process', 'dream'),
                   f'SDK call complete: {response.stop_reason}',
                   {'input_tokens': response.usage.input_tokens,
@@ -1511,7 +1517,7 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
 
         log_diagnostics(dream_id, graph_stats_before,
                         graph_stats_after=graph_stats_after,
-                        cli_output=output, exit_code=result.returncode,
+                        cli_output=output, exit_code=0,
                         duration_ms=duration_seconds * 1000,
                         op_results=op_results)
 
@@ -1542,6 +1548,11 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
             },
             "graph_before": graph_stats_before,
             "graph_after": graph_stats_after,
+            "usage": {
+                "input_tokens": output["usage"]["input_tokens"],
+                "output_tokens": output["usage"]["output_tokens"],
+            },
+            "cost_usd": cost_usd,
             "summary": summary, "reflections": reflections
         }
 
@@ -1567,6 +1578,198 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
                   f'Unhandled exception in {mode}: {e}',
                   {'exception_type': type(e).__name__}, dream_id=dream_id)
         return {"dream_id": dream_id, "error": str(e)}
+
+
+def run_dream_session(
+    mode: str = 'process',
+    budget_usd: float = None,
+    max_iterations: int = None,
+    force: bool = False,
+):
+    """Run a manual dream session with a real USD spend cap.
+
+    Wraps run_consolidation() in a loop that:
+      - Tracks accumulated cost from actual API usage on each iteration
+      - For 'process' mode, keeps draining the inbox until either the budget
+        is exhausted, the inbox is empty, or max_iterations is reached
+      - For other modes, runs a single iteration (looping ruminate / solo_work
+        rarely makes sense — they're not queue-drains)
+      - Pre-flight checks: if the previous iteration's cost would put us over
+        budget on a repeat, stop before spending more
+      - Returns a session summary with totals and per-iteration breakdown
+
+    This is the function the MCP somnia_dream tool should call when a user
+    triggers a manual dream with budget_usd set. Unlike run_consolidation,
+    this honors force=True for all readiness checks (process / ruminate /
+    solo_work) before the first iteration.
+
+    Args:
+        mode:           'process' | 'ruminate' | 'solo_work'
+        budget_usd:     Hard cost ceiling in USD. None = unlimited (use with care).
+        max_iterations: Hard iteration ceiling. None = no limit (budget is the only gate).
+        force:          Bypass readiness checks before the first iteration.
+
+    Returns:
+        {
+            "session_id": "...",
+            "mode": ...,
+            "iterations": [<run_consolidation result>, ...],
+            "iterations_run": int,
+            "total_cost_usd": float,
+            "budget_usd": float | None,
+            "budget_remaining_usd": float | None,
+            "total_input_tokens": int,
+            "total_output_tokens": int,
+            "totals": {
+                "nodes_created": int,
+                "edges_created": int,
+                "edges_reinforced": int,
+                "inbox_processed": int,
+            },
+            "stop_reason": "budget" | "inbox_empty" | "max_iterations"
+                           | "error" | "non_loopable_mode",
+            "errors": [...],
+            "graph_before": {...},
+            "graph_after": {...},
+        }
+    """
+    session_id = str(uuid.uuid4())
+    started_at = datetime.now().isoformat()
+
+    # Pre-flight readiness check (unless forced)
+    if not force:
+        if mode == 'ruminate':
+            ok, reason = should_ruminate()
+            if not ok:
+                return {"session_id": session_id, "error": "Not ready to ruminate", "reason": reason}
+        elif mode == 'solo_work':
+            ok, reason = should_solo_work()
+            if not ok:
+                return {"session_id": session_id, "error": "Not ready for solo-work", "reason": reason}
+        else:
+            ok, reason = can_dream()
+            if not ok:
+                return {"session_id": session_id, "error": "Not ready to dream", "reason": reason}
+
+    graph_stats_before = get_graph_stats()
+
+    iterations = []
+    totals = {
+        "nodes_created": 0,
+        "edges_created": 0,
+        "edges_reinforced": 0,
+        "inbox_processed": 0,
+    }
+    total_cost = 0.0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    errors = []
+    stop_reason = "completed"
+
+    log_event('info', 'session', f'Dream session started [{mode}]',
+              {'budget_usd': budget_usd, 'max_iterations': max_iterations, 'force': force},
+              dream_id=session_id)
+
+    iter_num = 0
+    while True:
+        iter_num += 1
+
+        # Iteration ceiling check
+        if max_iterations is not None and iter_num > max_iterations:
+            stop_reason = "max_iterations"
+            break
+
+        # Pre-flight budget check using the largest prior iteration's cost as a
+        # conservative estimator. If we've already spent N and another iteration
+        # could put us over budget, stop now rather than overshoot.
+        if budget_usd is not None and iterations:
+            largest_prior_cost = max(it.get('cost_usd', 0.0) for it in iterations)
+            if total_cost + largest_prior_cost > budget_usd:
+                stop_reason = "budget"
+                log_event('info', 'session',
+                          f'Stopping before iteration {iter_num}: '
+                          f'spent ${total_cost:.4f}, est next ${largest_prior_cost:.4f}, '
+                          f'cap ${budget_usd:.2f}',
+                          dream_id=session_id)
+                break
+
+        # For non-process modes, single iteration only — they don't loop usefully
+        if mode != 'process' and iter_num > 1:
+            stop_reason = "non_loopable_mode"
+            break
+
+        # For process mode, stop if inbox is empty
+        if mode == 'process':
+            inbox_now = get_graph_stats().get('inbox_pending', 0)
+            if inbox_now == 0:
+                stop_reason = "inbox_empty"
+                break
+
+        # Run one iteration. Pass force=True at the run_consolidation level
+        # because we already cleared readiness above for the session.
+        result = run_consolidation(dry_run=False, mode=mode, budget_override=None)
+
+        if "error" in result:
+            errors.append(f"iter {iter_num}: {result['error']}")
+            iterations.append(result)
+            stop_reason = "error"
+            break
+
+        iterations.append(result)
+        cost = result.get('cost_usd', 0.0)
+        total_cost += cost
+        usage = result.get('usage', {})
+        total_input_tokens += usage.get('input_tokens', 0)
+        total_output_tokens += usage.get('output_tokens', 0)
+
+        ops = result.get('operations', {})
+        totals['nodes_created']    += ops.get('nodes_created', 0)
+        totals['edges_created']    += ops.get('edges_created', 0)
+        totals['edges_reinforced'] += ops.get('edges_reinforced', 0)
+        totals['inbox_processed']  += ops.get('inbox_processed', 0)
+        if ops.get('errors'):
+            errors.extend(f"iter {iter_num}: {e}" for e in ops['errors'])
+
+        log_event('info', 'session',
+                  f'Iteration {iter_num} complete: '
+                  f'+${cost:.4f} (total ${total_cost:.4f}), '
+                  f'{ops.get("inbox_processed", 0)} inbox items',
+                  {'iteration': iter_num, 'cost_usd': cost, 'cumulative_cost': total_cost},
+                  dream_id=session_id)
+
+        # Hard stop AFTER an iteration if we've now exceeded budget
+        if budget_usd is not None and total_cost >= budget_usd:
+            stop_reason = "budget"
+            break
+
+    ended_at = datetime.now().isoformat()
+    graph_stats_after = get_graph_stats()
+    budget_remaining = (budget_usd - total_cost) if budget_usd is not None else None
+
+    log_event('info', 'session',
+              f'Dream session complete: {iter_num - 1 if stop_reason in ("budget","max_iterations") and not iterations else len(iterations)} iterations, '
+              f'${total_cost:.4f} spent, stop={stop_reason}',
+              {'iterations': len(iterations), 'total_cost': total_cost, 'stop_reason': stop_reason},
+              dream_id=session_id)
+
+    return {
+        "session_id": session_id,
+        "mode": mode,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "iterations": iterations,
+        "iterations_run": len(iterations),
+        "total_cost_usd": round(total_cost, 6),
+        "budget_usd": budget_usd,
+        "budget_remaining_usd": round(budget_remaining, 6) if budget_remaining is not None else None,
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "totals": totals,
+        "stop_reason": stop_reason,
+        "errors": errors,
+        "graph_before": graph_stats_before,
+        "graph_after": graph_stats_after,
+    }
 
 
 def cluster_stm_by_conversation(stm_items, gap_minutes=30):
@@ -2704,7 +2907,24 @@ def consolidate():
     dry_run = data.get("dry_run", False)
     mode = data.get("mode", "process")
     budget_override = data.get("budget_override")
+    max_iterations = data.get("max_iterations")
 
+    # Route to session loop when a real budget cap is requested.
+    # Session mode handles its own readiness checks (or skips them when forced).
+    # dry_run is incompatible with session mode — fall through to single-call.
+    if budget_override is not None and not dry_run:
+        result = run_dream_session(
+            mode=mode,
+            budget_usd=float(budget_override),
+            max_iterations=int(max_iterations) if max_iterations is not None else None,
+            force=force,
+        )
+        if "error" in result and "session_id" in result and not result.get("iterations"):
+            # Pre-flight readiness rejection — return 400 like the legacy path
+            return jsonify(result), 400
+        return jsonify(result)
+
+    # Legacy single-call path (no budget cap, or dry-run)
     if not force:
         if mode == 'ruminate':
             should, reason = should_ruminate()

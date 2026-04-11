@@ -624,6 +624,7 @@ def somnia_dream(
     mode: str = "process",
     force: bool = False,
     budget_override: float = None,
+    max_iterations: int = None,
 ) -> str:
     """
     Trigger a Somnia dream cycle.
@@ -637,45 +638,112 @@ def somnia_dream(
     budget cooldown, recent dream). Useful immediately after pinning/provisioning
     a new node when you want Somnia to process it right away.
 
-    Note: Dreams run synchronously and may take 30-120 seconds. The tool
-    waits for completion and returns a summary.
+    When budget_override is set, the daemon switches to SESSION MODE: for
+    process mode it loops consolidation calls until either the inbox is
+    drained, the spend cap is reached, or max_iterations is hit. For
+    ruminate/solo_work, session mode runs a single iteration with the
+    spend cap enforced as a hard ceiling. Session mode tracks real input +
+    output cost from API usage — not a max_tokens fudge.
+
+    Note: Dreams run synchronously. Single calls take 30-120s. Session mode
+    can take much longer (multiple iterations). The HTTP timeout is generous
+    but be aware.
 
     Args:
         mode:            Dream mode — process | ruminate | solo_work
         force:           Bypass readiness checks (default False)
-        budget_override: Optional USD cost cap for this dream (overrides config default).
-                         Useful for one-off expensive sessions without changing config.
+        budget_override: USD spend cap. When set, enables session mode.
+                         Tracks accumulated cost across iterations.
+        max_iterations:  Optional iteration ceiling for session mode (process only).
     """
     valid_modes = ("process", "ruminate", "solo_work")
     if mode not in valid_modes:
         return f"Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}"
 
-    _record_activity("dream_trigger", {"mode": mode, "force": force})
+    _record_activity("dream_trigger", {"mode": mode, "force": force,
+                                       "budget_override": budget_override})
 
     payload = {"mode": mode, "force": force}
     if budget_override is not None:
         payload["budget_override"] = budget_override
+    if max_iterations is not None:
+        payload["max_iterations"] = max_iterations
+
+    # Session mode can take a while — multiple consolidation calls in sequence.
+    # Allow up to 15 minutes for the HTTP roundtrip.
+    timeout = 900 if budget_override is not None else 180
 
     try:
         resp = requests.post(
             f"{API_BASE}/consolidate",
             json=payload,
-            timeout=180,   # Dreams can take up to 3 minutes
+            timeout=timeout,
         )
         resp.raise_for_status()
         result = resp.json()
     except requests.Timeout:
         return (
-            "Dream timed out waiting for response (>180s). "
+            f"Dream timed out waiting for response (>{timeout}s). "
             "It may still be running — check somnia_status or somnia_journal."
         )
     except requests.RequestException as e:
         return f"Dream request failed: {e}"
 
-    if "error" in result:
+    if "error" in result and not result.get("iterations"):
         reason = result.get("reason", result.get("stderr", ""))
         return f"Dream rejected: {result['error']}\nReason: {reason}"
 
+    # ── Session mode response (multi-iteration) ─────────────────────────
+    if "session_id" in result:
+        sid = result.get("session_id", "?")
+        iters = result.get("iterations_run", 0)
+        cost = result.get("total_cost_usd", 0.0)
+        budget = result.get("budget_usd")
+        remaining = result.get("budget_remaining_usd")
+        in_tok = result.get("total_input_tokens", 0)
+        out_tok = result.get("total_output_tokens", 0)
+        totals = result.get("totals", {})
+        gb = result.get("graph_before", {})
+        ga = result.get("graph_after", {})
+        stop = result.get("stop_reason", "?")
+        errs = result.get("errors", [])
+
+        # Format budget line. Clamp negative remaining (single overshoot
+        # iteration) to "exceeded" rather than showing $-0.04.
+        if budget is not None:
+            if remaining is not None and remaining < 0:
+                budget_line = f"  Cost:       ${cost:.4f} / ${budget:.2f} cap (exceeded by ${-remaining:.4f})"
+            elif remaining is not None:
+                budget_line = f"  Cost:       ${cost:.4f} / ${budget:.2f} cap (${remaining:.4f} remaining)"
+            else:
+                budget_line = f"  Cost:       ${cost:.4f} / ${budget:.2f} cap"
+        else:
+            budget_line = f"  Cost:       ${cost:.4f}"
+
+        lines = [
+            f"Dream session complete [{mode}{'·forced' if force else ''}]",
+            f"  Session:    {sid[:16]}...",
+            f"  Iterations: {iters}",
+            f"  Stop:       {stop}",
+            budget_line,
+            f"  Tokens:     in={in_tok:,}  out={out_tok:,}",
+            f"  Nodes:      {gb.get('node_count','?')} → {ga.get('node_count','?')}  "
+            f"(+{totals.get('nodes_created',0)} created)",
+            f"  Edges:      {gb.get('edge_count','?')} → {ga.get('edge_count','?')}  "
+            f"(+{totals.get('edges_created',0)} new, "
+            f"{totals.get('edges_reinforced',0)} reinforced)",
+            f"  Inbox:      {gb.get('inbox_pending','?')} → {ga.get('inbox_pending','?')}  "
+            f"({totals.get('inbox_processed',0)} processed)",
+        ]
+        if errs:
+            lines.append(f"  ⚠️  {len(errs)} error(s):")
+            for e in errs[:5]:
+                lines.append(f"     - {e}")
+            if len(errs) > 5:
+                lines.append(f"     ... and {len(errs) - 5} more")
+        return "\n".join(lines)
+
+    # ── Legacy single-call response ─────────────────────────────────────
     ops = result.get("operations", {})
     gb = result.get("graph_before", {})
     ga = result.get("graph_after", {})
@@ -683,11 +751,16 @@ def somnia_dream(
     duration = result.get("duration_seconds", "?")
     summary = result.get("summary", "(no summary)")
     reflections = result.get("reflections", "")
+    cost = result.get("cost_usd")
 
     lines = [
         f"Dream complete [{mode}{'·forced' if force else ''}]",
         f"  ID:        {dream_id[:16]}...",
         f"  Duration:  {duration}s",
+    ]
+    if cost is not None:
+        lines.append(f"  Cost:      ${cost:.4f}")
+    lines += [
         f"  Nodes:     {gb.get('node_count','?')} → {ga.get('node_count','?')}  "
         f"(+{ops.get('nodes_created',0)} created)",
         f"  Edges:     {gb.get('edge_count','?')} → {ga.get('edge_count','?')}  "
