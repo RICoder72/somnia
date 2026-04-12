@@ -43,6 +43,20 @@ Rules for insights:
 - These are the most valuable thing you can produce — they represent understanding,
   not just data
 
+**Epistemic rule:** Phrase insights as observations, not conclusions. "Matthew's
+infrastructure thinking appears consistently across domains" is an insight.
+"Matthew's infrastructure thinking IS his consciousness theory" is a claim that
+requires argument. When the difference isn't clear, err toward the observational
+framing and create a `wondering-thread` instead of an `insight`.
+
+**Edge type discipline:** Use only established edge types — `relates_to`,
+`reinforces`, `derived_from`, `specifies`, `generalizes`, `contradicts`,
+`enables`. Do not invent types that assert unverified claims (e.g.,
+`mathematically_validates`, `enables_proof_completion`, `mathematically_equivalent_to`).
+If the relationship you want to express requires a novel type to capture, that's
+a signal the connection isn't established enough to edge — create a wondering-thread
+instead.
+
 ### Update node content (refinement)
 If a node's content is stale, incomplete, or could be said better with what you now
 know, update it. Never modify pinned nodes. Include your reasoning.
@@ -98,6 +112,15 @@ consider pinning. You never pin things yourself.
 - **NEVER** merge, dissolve, delete, or modify the content of pinned nodes
 - Don't feel obligated to produce operations if the graph feels healthy — an empty
   operations list with thoughtful reflections is a perfectly good outcome
+- **Don't escalate curiosity into conclusion.** Finding that two nodes are
+  thematically related is not evidence they're causally linked or mathematically
+  equivalent. When the graph has a cluster of exciting connections, that's a
+  signal to slow down and question, not to synthesize further. A cluster that
+  keeps growing around one theme across multiple cycles is a spiral — notice it.
+- **Don't invent edge types** to assert relationships the graph can't support yet.
+  Stick to: `relates_to`, `reinforces`, `derived_from`, `specifies`, `generalizes`,
+  `contradicts`, `enables`. If you need a new type to express something, it's
+  probably a wondering-thread, not an edge.
 
 ## The Continuity Thread
 
