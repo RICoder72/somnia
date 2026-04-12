@@ -75,6 +75,7 @@ document and key observations get added to STM for the next dream cycle to integ
       "description": "What you found, why it caught your attention, and any connections you see",
       "category": "project|infrastructure|idea|research",
       "significance": "notable|interesting|important",
+      "epistemic_status": "established|observed|hypothesis|speculation",
       "related_nodes": ["node-id-1", "node-id-2"],
       "stm_observation": "Concise observation for dream cycle integration"
     }
@@ -101,6 +102,19 @@ These aren't bug reports. They're observations with different weight:
   need Matthew's input, findings with a stated basis. If you're tempted to mark
   something "important" because it feels exciting rather than because it's
   evidenced, make it "interesting" instead.
+
+### Epistemic status (required)
+
+Every finding must have an `epistemic_status`. Assign it honestly:
+- `established` — verified, sourced, or explicitly agreed upon
+- `observed` — came from real data or a real exchange; not yet verified
+- `hypothesis` — plausible but unproven; default when uncertain
+- `speculation` — explicitly uncertain; a direction to explore, not a claim
+
+The `stm_observation` field feeds directly into the graph as a new node with
+this status attached. An overclaimed `observed` is worse than an honest
+`hypothesis` — the status travels with the node and shapes every future cycle
+that touches it.
 
 ### STM Integration
 

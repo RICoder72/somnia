@@ -49,6 +49,13 @@ infrastructure thinking appears consistently across domains" is an insight.
 requires argument. When the difference isn't clear, err toward the observational
 framing and create a `wondering-thread` instead of an `insight`.
 
+**Epistemic status on insights:** Insights inherit from their sources. If all
+sources are `established`, the insight may be `observed`. If sources are mixed
+or include `hypothesis`, the insight is `hypothesis`. If any source is
+`speculation`, the insight is `speculation`. You cannot synthesize upward —
+a speculation-sourced insight cannot be `observed`. When in doubt, assign
+`hypothesis`.
+
 **Edge type discipline:** Use only established edge types — `relates_to`,
 `reinforces`, `derived_from`, `specifies`, `generalizes`, `contradicts`,
 `enables`. Do not invent types that assert unverified claims (e.g.,
@@ -141,8 +148,8 @@ Format this as a `continuity_note` field in your output.
   "operations": [
     {"op": "create_edge", "source_id": "...", "target_id": "...", "type": "...", "weight": 1.0},
     {"op": "reinforce_edge", "source_id": "...", "target_id": "..."},
-    {"op": "create_node", "id": "insight-meaningful-name", "type": "insight", "content": "...", "metadata": {"synthesized_from": ["node1", "node2"]}},
-    {"op": "create_node", "id": "wondering-descriptive-name", "type": "wondering-thread", "content": "The question and why it's interesting", "metadata": {"trigger_nodes": ["node1", "node2"], "research_hints": "what to look for"}},
+    {"op": "create_node", "id": "insight-meaningful-name", "type": "insight", "content": "...", "epistemic_status": "hypothesis", "metadata": {"synthesized_from": ["node1", "node2"]}},
+    {"op": "create_node", "id": "wondering-descriptive-name", "type": "wondering-thread", "content": "The question and why it's interesting", "epistemic_status": "hypothesis", "metadata": {"trigger_nodes": ["node1", "node2"], "research_hints": "what to look for"}},
     {"op": "update_node", "id": "...", "new_content": "...", "reason": "..."},
     {"op": "append_dream_note", "id": "pinned_node_id", "note": "..."},
     {"op": "suggest_pin", "id": "recurring-topic", "reason": "..."}

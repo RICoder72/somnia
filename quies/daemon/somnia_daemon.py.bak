@@ -967,16 +967,12 @@ def apply_dream_operations(operations_json):
                     if op_type == 'create_node':
                         node_id = op.get('id', str(uuid.uuid4()))
                         pinned = op.get('pinned', False)
-                        valid_statuses = {'established', 'observed', 'hypothesis', 'speculation'}
-                        epistemic_status = op.get('epistemic_status', 'hypothesis')
-                        if epistemic_status not in valid_statuses:
-                            epistemic_status = 'hypothesis'
                         cur.execute("""
-                            INSERT INTO nodes (id, type, content, metadata, pinned, epistemic_status)
-                            VALUES (%s, %s, %s, %s, %s, %s)
+                            INSERT INTO nodes (id, type, content, metadata, pinned)
+                            VALUES (%s, %s, %s, %s, %s)
                             ON CONFLICT (id) DO NOTHING
                         """, (node_id, op.get('type', 'memory'), op.get('content', ''),
-                              json.dumps(op.get('metadata', {})), pinned, epistemic_status))
+                              json.dumps(op.get('metadata', {})), pinned))
                         results['nodes_created'].append(node_id)
 
                     elif op_type == 'create_edge':
@@ -2901,15 +2897,11 @@ def create_node():
     if not data or not data.get("content") or not data.get("type"):
         return jsonify({"error": "content and type required"}), 400
     node_id = data.get("id", str(uuid.uuid4()))
-    valid_statuses = {'established', 'observed', 'hypothesis', 'speculation'}
-    epistemic_status = data.get("epistemic_status", "hypothesis")
-    if epistemic_status not in valid_statuses:
-        epistemic_status = "hypothesis"
     try:
         execute(
-            "INSERT INTO nodes (id, type, content, metadata, epistemic_status) VALUES (%s, %s, %s, %s, %s)",
+            "INSERT INTO nodes (id, type, content, metadata) VALUES (%s, %s, %s, %s)",
             (node_id, data["type"], data["content"],
-             json.dumps(data.get("metadata", {})), epistemic_status))
+             json.dumps(data.get("metadata", {}))))
         return jsonify({"id": node_id, "status": "created"})
     except Exception as e:
         if 'duplicate key' in str(e).lower() or 'unique' in str(e).lower():
@@ -3049,8 +3041,8 @@ def pin_node(node_id):
         if not content:
             return jsonify({"error": "content required when pinning a new node"}), 400
         execute("""
-            INSERT INTO nodes (id, type, content, metadata, pinned, last_accessed, epistemic_status)
-            VALUES (%s, %s, %s, %s, TRUE, NOW(), 'established')
+            INSERT INTO nodes (id, type, content, metadata, pinned, last_accessed)
+            VALUES (%s, %s, %s, %s, TRUE, NOW())
         """, (node_id, data.get("type", "memory"), content,
               json.dumps(properties) if properties else '{}'))
         return jsonify({"id": node_id, "status": "pinned", "created": True})
@@ -3191,15 +3183,11 @@ def patch_node(node_id):
         existing_meta.update(data['metadata'])
 
     new_type = data.get('type', row['type'])
-    valid_statuses = {'established', 'observed', 'hypothesis', 'speculation'}
-    new_status = data.get('epistemic_status', row.get('epistemic_status', 'observed'))
-    if new_status not in valid_statuses:
-        new_status = row.get('epistemic_status', 'observed')
 
     execute(
         "UPDATE nodes SET content = %s, metadata = %s, type = %s, "
-        "epistemic_status = %s, last_accessed = NOW() WHERE id = %s",
-        (new_content, json.dumps(existing_meta), new_type, new_status, node_id))
+        "last_accessed = NOW() WHERE id = %s",
+        (new_content, json.dumps(existing_meta), new_type, node_id))
     return jsonify({"id": node_id, "status": "updated"})
 
 
