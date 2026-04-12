@@ -504,92 +504,119 @@ def warm_nodes(node_ids, delta=0.02, _cascade=True):
 
 def apply_passive_cooldown():
     """Apply decay to all nodes each scheduler cycle.
-    
-    Decay modifiers:
-    - Pinned nodes have a floor (pinned_floor)
-    - Well-reinforced nodes have a floor (reinforcement_floor)
-    - Highly-connected nodes decay slower (connectivity tiers)
-    - Demotes deeply cold LTM nodes to SLTM
+
+    Decay reform model (pg_009 + workspaces/somnia/GRAPH_MEMORY_DESIGN.md):
+
+    Effective decay rate = base_rate * type_profile.rate_multiplier
+                                     * connectivity_multiplier (if enabled)
+
+    Effective floor = max of all applicable floors:
+      - pinned_floor       (if pinned)
+      - foundational_floor (if foundational=true)
+      - type_profile.floor (per-type minimum from config)
+      - connectivity_floor (proportional to edge count)
+      - reinforcement_floor (if reinforced >= stable_count)
+
+    Whichever protection applies most strongly wins. The result is that
+    important nodes (pinned, foundational, highly connected, well reinforced,
+    or of a structurally important type like 'concept' or 'archetype')
+    naturally resist decay through whichever lever is most relevant.
     """
     decay_cfg = CONFIG.get('decay', {})
-    base_rate = decay_cfg.get('passive_cooldown_per_cycle', 0.0005)
-    sltm_threshold = decay_cfg.get('sltm_threshold', 0.05)
-    pinned_floor = decay_cfg.get('pinned_floor', 0.5)
-    reinf_floor = decay_cfg.get('reinforcement_floor', 0.20)
-    stable_count = decay_cfg.get('stable_reinforcement_count', 5)
-    use_connectivity = decay_cfg.get('connectivity_decay_reduction', True)
-    tiers = decay_cfg.get('connectivity_tiers', {5: 0.75, 10: 0.50, 20: 0.25})
+    base_rate            = decay_cfg.get('passive_cooldown_per_cycle', 0.0005)
+    sltm_threshold       = decay_cfg.get('sltm_threshold', 0.05)
+    pinned_floor         = decay_cfg.get('pinned_floor', 0.5)
+    foundational_floor   = decay_cfg.get('foundational_floor', 0.35)
+    reinf_floor          = decay_cfg.get('reinforcement_floor', 0.20)
+    stable_count         = decay_cfg.get('stable_reinforcement_count', 5)
+    use_connectivity     = decay_cfg.get('connectivity_decay_reduction', True)
+    conn_tiers           = decay_cfg.get('connectivity_tiers', {5: 0.75, 10: 0.50, 20: 0.25})
+    conn_floor_per_edge  = decay_cfg.get('connectivity_floor_per_edge', 0.01)
+    conn_floor_max       = decay_cfg.get('connectivity_floor_max', 0.30)
+    type_profiles        = decay_cfg.get('type_profiles', {})
 
-    # Sort tiers descending so we match highest first
-    sorted_tiers = sorted(tiers.items(), key=lambda x: -x[0])
+    # Sort connectivity tiers descending so we match highest first
+    sorted_tiers = sorted(conn_tiers.items(), key=lambda x: -x[0])
 
-    if use_connectivity:
-        # Fetch non-pinned nodes with their edge counts and reinforcement
-        conn = get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT n.id, n.decay_state, n.reinforcement_count,
-                           COUNT(DISTINCT e.id) as edge_count
-                    FROM nodes n
-                    LEFT JOIN edges e ON e.source_id = n.id OR e.target_id = n.id
-                    WHERE n.pinned = FALSE AND n.decay_state > 0.0
-                    GROUP BY n.id, n.decay_state, n.reinforcement_count
-                """)
-                rows = cur.fetchall()
+    # Single-pass per-row update. We need per-row computation for the
+    # multi-source floor resolution; SQL-only is no longer expressive enough.
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT n.id, n.type, n.decay_state, n.reinforcement_count,
+                       n.pinned, n.foundational,
+                       COUNT(DISTINCT e.id) as edge_count
+                FROM nodes n
+                LEFT JOIN edges e ON e.source_id = n.id OR e.target_id = n.id
+                WHERE n.decay_state > 0.0
+                GROUP BY n.id, n.type, n.decay_state, n.reinforcement_count,
+                         n.pinned, n.foundational
+            """)
+            rows = cur.fetchall()
 
-                for row in rows:
-                    node_id, decay_state, reinf_count, edge_count = row
+            updates = []
+            for row in rows:
+                node_id, ntype, decay_state, reinf_count, is_pinned, \
+                    is_foundational, edge_count = row
 
-                    # Determine decay multiplier from connectivity
-                    multiplier = 1.0
+                # ── Decay rate ────────────────────────────────────────
+                profile = type_profiles.get(ntype, {})
+                type_mult = profile.get('rate_multiplier', 1.0)
+
+                conn_mult = 1.0
+                if use_connectivity:
                     for threshold, mult in sorted_tiers:
                         if edge_count >= threshold:
-                            multiplier = mult
+                            conn_mult = mult
                             break
 
-                    effective_rate = base_rate * multiplier
-                    new_decay = max(0.0, decay_state - effective_rate)
+                effective_rate = base_rate * type_mult * conn_mult
 
-                    # Apply reinforcement floor
-                    if reinf_count >= stable_count:
-                        new_decay = max(reinf_floor, new_decay)
+                # ── Floor (max of all applicable protections) ─────────
+                floors = [0.0]
+                if is_pinned:
+                    floors.append(pinned_floor)
+                if is_foundational:
+                    floors.append(foundational_floor)
+                # Type floor — applies to everything, even unreinforced nodes
+                floors.append(profile.get('floor', 0.0))
+                # Connectivity floor — proportional to edge count, capped
+                floors.append(min(conn_floor_max, edge_count * conn_floor_per_edge))
+                # Reinforcement floor — only if reinforced enough
+                if reinf_count >= stable_count:
+                    floors.append(reinf_floor)
 
-                    if new_decay != decay_state:
-                        cur.execute("UPDATE nodes SET decay_state = %s WHERE id = %s",
-                                    (new_decay, node_id))
+                effective_floor = max(floors)
 
-                conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            put_conn(conn)
-    else:
-        # Simple mode: uniform decay for non-pinned, with reinforcement floor
-        execute("""
-            UPDATE nodes SET decay_state = GREATEST(0.0, decay_state - %s)
-            WHERE pinned = FALSE AND decay_state > 0.0
-            AND reinforcement_count < %s
-        """, (base_rate, stable_count))
+                new_decay = max(effective_floor, decay_state - effective_rate)
 
-        # Reinforced nodes: decay but respect floor
-        execute("""
-            UPDATE nodes SET decay_state = GREATEST(%s, decay_state - %s)
-            WHERE pinned = FALSE AND decay_state > %s
-            AND reinforcement_count >= %s
-        """, (reinf_floor, base_rate, reinf_floor, stable_count))
+                if new_decay != decay_state:
+                    updates.append((new_decay, node_id))
 
-    # Cool pinned nodes (floor at pinned_floor)
-    execute("""
-        UPDATE nodes SET decay_state = GREATEST(%s, decay_state - %s)
-        WHERE pinned = TRUE AND decay_state > %s
-    """, (pinned_floor, base_rate, pinned_floor))
+            # Batch the writes
+            if updates:
+                cur.executemany(
+                    "UPDATE nodes SET decay_state = %s WHERE id = %s",
+                    updates
+                )
 
-    # Demote deeply cold LTM nodes to SLTM (not pinned)
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        put_conn(conn)
+
+    # Demote deeply cold LTM nodes to SLTM (not pinned, not foundational).
+    # Foundational nodes never demote to SLTM regardless of decay — that's
+    # the whole point of the flag.
     execute("""
         UPDATE nodes SET memory_layer = 'sltm'
-        WHERE memory_layer = 'ltm' AND pinned = FALSE AND decay_state <= %s
+        WHERE memory_layer = 'ltm'
+          AND pinned = FALSE
+          AND foundational = FALSE
+          AND decay_state <= %s
     """, (sltm_threshold,))
 
 

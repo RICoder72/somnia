@@ -55,6 +55,43 @@ decay:
     10: 0.50                          # 10+ edges: 50% of normal decay
     20: 0.25                          # 20+ edges: 25% of normal decay
 
+  # ── Decay reform (pg_009) ─────────────────────────────────────────────
+  # Hard floor for foundational=true nodes. Overrides everything else.
+  foundational_floor: 0.35
+
+  # Per-edge floor contribution for the connectivity floor.
+  # Effective floor = min(connectivity_floor_max, edge_count * connectivity_floor_per_edge)
+  # Example: a node with 22 edges has connectivity_floor = min(0.30, 0.22) = 0.22
+  # Example: a node with 37 edges has connectivity_floor = min(0.30, 0.37) = 0.30
+  connectivity_floor_per_edge: 0.01
+  connectivity_floor_max: 0.30
+
+  # Type-based decay profiles. Each profile is (rate_multiplier, floor).
+  # rate_multiplier scales the base passive_cooldown_per_cycle for nodes of
+  # that type. floor is the type's minimum decay_state — protects core
+  # conceptual nodes from time-decay alone.
+  #
+  # Effective floor for any node = max(
+  #     pinned_floor (if pinned),
+  #     foundational_floor (if foundational),
+  #     type_profile.floor,
+  #     connectivity_floor (computed from edge count),
+  #     reinforcement_floor (if reinforced enough)
+  # )
+  #
+  # Whichever protection applies most strongly wins.
+  type_profiles:
+    personality:    { rate_multiplier: 0.05, floor: 0.40 }  # DCAT loop — character traits
+    archetype:      { rate_multiplier: 0.10, floor: 0.35 }  # foundational patterns
+    concept:        { rate_multiplier: 0.30, floor: 0.20 }  # durable ideas
+    principle:      { rate_multiplier: 0.30, floor: 0.20 }  # durable ideas
+    insight:        { rate_multiplier: 0.60, floor: 0.10 }  # significant but time-bound
+    fact:           { rate_multiplier: 1.00, floor: 0.05 }  # standard rate
+    procedure:      { rate_multiplier: 1.00, floor: 0.05 }  # standard rate
+    memory:         { rate_multiplier: 1.00, floor: 0.00 }  # episodic — can fully fade
+    event:          { rate_multiplier: 1.00, floor: 0.00 }  # episodic — can fully fade
+    wondering-thread: { rate_multiplier: 0.70, floor: 0.05 }  # semi-durable exploration
+
 # Logging
 logging:
   level: INFO
