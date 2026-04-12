@@ -159,7 +159,7 @@ def register(mcp: FastMCP):
         # Build the pipeline command executed inside Forge's container
         command = (
             f"set -e && "
-            f"python /workspace/preprocess_md.py '{md_path}' > /tmp/_pub_preprocess.md && "
+            f"python /workspace/preprocess_md.py '{md_path}' /tmp/_pub_preprocess.md && "
             f"pandoc /tmp/_pub_preprocess.md "
             f"--pdf-engine=xelatex "
             f"--include-in-header=/workspace/dcat-preamble.tex "
