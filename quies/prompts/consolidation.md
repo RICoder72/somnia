@@ -48,6 +48,16 @@ matters, a fact worth keeping, a question you want to return to.
 
 Node types: `memory`, `concept`, `procedure`, `preference`, `fact`, `insight`, `question`
 
+**Every new node requires an `epistemic_status` field.** This is not optional. Assign it
+based on what the observation actually supports:
+- `established` — verified in conversation, explicitly agreed upon, or sourced
+- `observed` — seen/noticed, came from a real exchange, not yet verified
+- `hypothesis` — plausible but unproven; requires evidence to promote (use this when uncertain)
+- `speculation` — explicitly uncertain; a wondering, not a claim
+
+Default to `hypothesis` when in doubt. The status travels with the node and shapes
+how future cycles treat it. An overclaimed `observed` is worse than an honest `hypothesis`.
+
 ### Create edges (connections)
 Link new nodes to existing ones, or connect existing nodes you now see relate to each
 other. The edge type should say something real about the relationship.
@@ -84,7 +94,7 @@ Pinned nodes are sovereign — you never modify their content. But you can:
   "summary": "One-sentence description of what you did this session",
   "reflections": "What you noticed, what interested you, what patterns you see forming",
   "operations": [
-    {"op": "create_node", "id": "meaningful-kebab-id", "type": "memory", "content": "...", "metadata": {"source": "stm_id"}},
+    {"op": "create_node", "id": "meaningful-kebab-id", "type": "memory", "content": "...", "epistemic_status": "observed", "metadata": {"source": "stm_id"}},
     {"op": "create_edge", "source_id": "...", "target_id": "...", "type": "relates_to", "weight": 1.0},
     {"op": "reinforce_edge", "source_id": "...", "target_id": "..."},
     {"op": "mark_processed", "stm_node_id": "..."},
