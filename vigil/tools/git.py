@@ -107,13 +107,16 @@ def register(mcp: FastMCP):
 
         if auth_item:
             try:
+                import re
                 from core.credentials import get_credential
                 token = get_credential(auth_item)
                 success, remote_url = _run_git(["remote", "get-url", remote], cwd=repo)
                 if not success:
                     return f"❌ Could not get remote URL: {remote_url}"
                 if "github.com" in remote_url and remote_url.startswith("https://"):
-                    auth_url = remote_url.replace("https://", f"https://x-access-token:{token}@")
+                    # Strip any existing userinfo (e.g. "user:@") before injecting token
+                    clean_url = re.sub(r"https://[^@]+@", "https://", remote_url)
+                    auth_url = clean_url.replace("https://", f"https://x-access-token:{token}@")
                     args = ["push", auth_url]
                     if branch:
                         args.append(branch)
