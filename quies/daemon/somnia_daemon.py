@@ -3511,14 +3511,31 @@ def _render_analytics_html(markdown_report, days):
   p {{ margin: 0.5rem 0; }}
   blockquote {{ border-left: 3px solid var(--accent); padding-left: 1rem; color: var(--muted); margin: 0.75rem 0; }}
   hr {{ border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }}
-  .nav {{ margin-bottom: 1.5rem; }}
-  .nav a {{ color: var(--accent); text-decoration: none; margin-right: 1rem; font-size: 0.9rem; }}
-  .nav a:hover {{ text-decoration: underline; }}
   em {{ color: var(--muted); }}
+  .topbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; gap: 16px; margin: -2rem -2rem 1.5rem -2rem; }}
+  .topbar-logo {{ font-family: 'SFMono-Regular', Consolas, monospace; font-size: 16px; font-weight: 700; color: var(--accent); letter-spacing: -0.5px; text-decoration: none; }}
+  .topbar-logo:hover {{ text-decoration: none; color: var(--accent); }}
+  .topbar-nav {{ margin-left: auto; display: flex; gap: 4px; font-size: 13px; }}
+  .topbar-link {{ color: var(--muted); text-decoration: none; padding: 6px 14px; border-radius: 8px; transition: color 0.15s, background 0.15s; }}
+  .topbar-link:hover {{ color: var(--fg); text-decoration: none; background: #ffffff08; }}
+  .topbar-link.active {{ color: var(--accent); background: #58a6ff15; font-weight: 500; }}
+  .topbar-link.active:hover {{ color: var(--accent); background: #58a6ff20; }}
+  .sub-nav {{ margin-bottom: 1.5rem; display: flex; gap: 12px; align-items: center; font-size: 0.85rem; }}
+  .sub-nav a {{ color: var(--muted); text-decoration: none; padding: 4px 10px; border-radius: 6px; }}
+  .sub-nav a:hover {{ color: var(--accent); background: #ffffff08; }}
+  .sub-nav .label {{ color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; margin-right: 4px; }}
 </style>
 </head>
 <body>
-<div class="nav">
+<div class="topbar">
+  <a href="/portal" class="topbar-logo">✦ somnia</a>
+  <nav class="topbar-nav">
+    <a href="/portal" class="topbar-link">Portal</a>
+    <a href="/dashboard" class="topbar-link">Dashboard</a>
+  </nav>
+</div>
+<div class="sub-nav">
+  <span class="label">Analytics</span>
   <a href="/analytics?format=html&days=7">7d</a>
   <a href="/analytics?format=html&days=14">14d</a>
   <a href="/analytics?format=html&days=30">30d</a>
@@ -4176,6 +4193,17 @@ def dashboard():
   .meta{{color:var(--muted);font-size:0.8rem}}
   nav a{{color:var(--muted);text-decoration:none;margin-left:1rem;font-size:0.85rem}}
   nav a:hover{{color:var(--accent)}}
+  .topbar{{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;gap:16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif}}
+  .topbar-logo{{font-family:'SFMono-Regular',Consolas,monospace;font-size:16px;font-weight:700;color:var(--accent);letter-spacing:-0.5px;text-decoration:none}}
+  .topbar-logo:hover{{text-decoration:none;color:var(--accent)}}
+  .topbar-nav{{margin-left:auto;display:flex;gap:4px;font-size:13px}}
+  .topbar-link{{color:var(--muted);text-decoration:none;padding:6px 14px;border-radius:8px;transition:color 0.15s,background 0.15s}}
+  .topbar-link:hover{{color:var(--fg);text-decoration:none;background:#ffffff08}}
+  .topbar-link.active{{color:var(--accent);background:#58a6ff15;font-weight:500}}
+  .topbar-link.active:hover{{color:var(--accent);background:#58a6ff20}}
+  .meta-strip{{padding:0.5rem 1.5rem;background:var(--surface);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:0.8rem;color:var(--muted)}}
+  .meta-strip a{{color:var(--muted);text-decoration:none;margin-left:1rem;font-size:0.8rem}}
+  .meta-strip a:hover{{color:var(--accent)}}
   .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;padding:1rem 1.5rem}}
   .grid-wide{{grid-column:1/-1}}
   .card{{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1rem}}
@@ -4205,15 +4233,20 @@ def dashboard():
 </style>
 </head>
 <body>
-<header>
-  <h1>🧠 Somnia Dashboard</h1>
-  <nav>
-    <a href="/somnia/api/analytics?format=html&days=7">Analytics (7d)</a>
-    <a href="/somnia/api/analytics?format=html&days=30">Analytics (30d)</a>
-    <a href="/portal">Portal</a>
+<div class="topbar">
+  <a href="/portal" class="topbar-logo">✦ somnia</a>
+  <nav class="topbar-nav">
+    <a href="/portal" class="topbar-link">Portal</a>
+    <a href="/dashboard" class="topbar-link active">Dashboard</a>
   </nav>
-  <span class="meta">↻ auto-refresh 120s &nbsp;·&nbsp; {generated}</span>
-</header>
+</div>
+<div class="meta-strip">
+  <span>↻ auto-refresh 120s &nbsp;·&nbsp; {generated}</span>
+  <span>
+    <a href="/somnia/api/analytics?format=html&days=7">Analytics 7d</a>
+    <a href="/somnia/api/analytics?format=html&days=30">Analytics 30d</a>
+  </span>
+</div>
 
 <div class="grid">
 
