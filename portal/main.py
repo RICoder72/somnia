@@ -193,11 +193,23 @@ STYLES = """
       align-items: center;
       gap: 16px;
     }
-    .topbar-logo { font-family: var(--mono); font-size: 16px; font-weight: 700; color: var(--accent); letter-spacing: -0.5px; }
-    .topbar-logo span { color: var(--muted); font-weight: 400; }
-    .topbar-nav { margin-left: auto; display: flex; gap: 20px; font-size: 13px; color: var(--muted); }
-    .topbar-nav a { color: var(--muted); }
-    .topbar-nav a:hover { color: var(--text); }
+    .topbar-logo {
+      font-family: var(--mono); font-size: 16px; font-weight: 700;
+      color: var(--accent); letter-spacing: -0.5px;
+      text-decoration: none;
+    }
+    .topbar-logo:hover { text-decoration: none; color: var(--accent); }
+    .topbar-nav { margin-left: auto; display: flex; gap: 4px; font-size: 13px; }
+    .topbar-link {
+      color: var(--muted);
+      text-decoration: none;
+      padding: 6px 14px;
+      border-radius: var(--radius);
+      transition: color 0.15s, background 0.15s;
+    }
+    .topbar-link:hover { color: var(--text); text-decoration: none; background: #ffffff08; }
+    .topbar-link.active { color: var(--accent); background: #58a6ff15; font-weight: 500; }
+    .topbar-link.active:hover { color: var(--accent); background: #58a6ff20; }
     .container { max-width: 1040px; margin: 0 auto; padding: 32px 24px; }
     .breadcrumb { font-size: 13px; color: var(--muted); margin-bottom: 20px; display: flex; align-items: center; gap: 6px; }
     .breadcrumb a { color: var(--muted); }
@@ -351,7 +363,9 @@ STYLES = """
 """
 
 
-def html_shell(title: str, body: str, extra_head: str = "") -> str:
+def html_shell(title: str, body: str, extra_head: str = "", active: str = "portal") -> str:
+    portal_cls = "topbar-link active" if active == "portal" else "topbar-link"
+    dashboard_cls = "topbar-link active" if active == "dashboard" else "topbar-link"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -363,10 +377,10 @@ def html_shell(title: str, body: str, extra_head: str = "") -> str:
 </head>
 <body>
   <div class="topbar">
-    <div class="topbar-logo">✦ somnia <span>/ portal</span></div>
+    <a href="/portal" class="topbar-logo">✦ somnia</a>
     <nav class="topbar-nav">
-      <a href="/portal">Home</a>
-      <a href="/dashboard" target="_blank">Dashboard ↗</a>
+      <a href="/portal" class="{portal_cls}">Portal</a>
+      <a href="/dashboard" class="{dashboard_cls}">Dashboard</a>
     </nav>
   </div>
   <div class="container">
