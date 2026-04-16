@@ -547,7 +547,7 @@ async def landing():
     <div class="section-label">System Health</div>
     {health_html}
 
-    <div class="section-label">Active Projects ({len(nodes)})</div>
+    <div class="section-label">Active Workspaces ({len(nodes)})</div>
     <div class="card-grid">
       {node_cards}
     </div>

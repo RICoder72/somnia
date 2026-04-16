@@ -1,7 +1,7 @@
 [project]
 name = "fabrica"
 version = "1.0.0"
-description = "Constellation admin MCP — container management, config, backups"
+description = "Fabrica admin MCP — container management, config, backups"
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=2.0.0",
