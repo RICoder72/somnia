@@ -1,7 +1,7 @@
 [project]
 name = "forge"
 version = "1.0.0"
-description = "Constellation Forge — workbench MCP with full GIS/Python/Node toolchain"
+description = "Somnia Forge — workbench MCP with full GIS/Python/Node toolchain"
 requires-python = ">=3.12"
 dependencies = [
     # MCP framework

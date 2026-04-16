@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 API_BASE = "http://localhost:8010"
 
 # Filesystem roots — these are the canonical paths inside the container,
-# which map to the shared /data volume accessible by all Constellation services.
+# which map to the shared /data volume accessible by all Somnia services.
 DATA_ROOT       = Path("/data")
 WORKSPACES_ROOT = DATA_ROOT / "workspaces"
 OUTPUTS_ROOT    = DATA_ROOT / "outputs"
@@ -434,7 +434,7 @@ def somnia_pin(
     somnia_provision to create its storage footprint and portal card.
 
     Args:
-        id: Node ID (use kebab-case, e.g. "constellation", "burrillville")
+        id: Node ID (use kebab-case, e.g. "somnia", "burrillville")
         content: Description of what this node represents
         properties: JSON string of properties to set/merge
         unpin: Set True to unpin (node stays in graph, loses durability)

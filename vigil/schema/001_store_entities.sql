@@ -1,5 +1,5 @@
 -- Vigil entity store: initial schema
--- Absorbed from Constellation Store
+-- Absorbed from old Store service
 -- Tables: entities, relationships, entity_type_schemas
 --
 -- NOTE: These tables may already exist (created by Store).

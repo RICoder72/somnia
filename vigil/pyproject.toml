@@ -1,7 +1,7 @@
 [project]
 name = "vigil"
 version = "0.3.0"
-description = "Vigil MCP — Constellation core tools + services (filesystem, git, shell, domains, mail, calendar, contacts, storage, entity store)"
+description = "Vigil MCP — Somnia core tools + services (filesystem, git, shell, domains, mail, calendar, contacts, storage, entity store)"
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=2.0.0",
