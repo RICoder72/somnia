@@ -1,13 +1,19 @@
 """
 sticky_notes.py — Somnia sticky notes system
 
-A server-side markdown file maintained autonomously by Quies.
-Written incrementally during harvest, updated after dream cycles.
+A server-side markdown file maintained autonomously by Quies and updated
+by Claude at the end of in-session conversation harvests.
+
 Read at session start to give new Claude instances working-memory
 context — what was just done, what's been covered, what to pick up.
+Written by:
+  - Quies after dream cycles (dream summary, nudges, graph health)
+  - Claude after in-session harvests (last harvest timestamp + summary)
 
 Two-layer architecture:
   harvest_state.json  — machine enforcement (UUID set, never re-mine)
+                        Lives at workspaces/claude/findings/harvest_state.json
+                        Maintained by Claude's in-session harvest pipeline.
   sticky-notes.md     — human-readable audit trail Claude can reason about
 
 The notes file is ephemeral by design. It's the whiteboard, not the notebook.

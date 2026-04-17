@@ -262,28 +262,26 @@ def get_system_state() -> dict:
     except Exception:
         state['seconds_since_interaction'] = float('inf')
 
-    # Raw conversation file backlog
+    # Time since last in-session harvest (seconds)
+    # Claude writes harvest_state.json to workspaces/claude/findings/ at
+    # the end of conversations via the in-session harvest pipeline. The
+    # daemon no longer runs its own harvester; this metric exists only
+    # for state-view purposes.
     try:
-        raw_dir = Path(os.environ.get('SOMNIA_DATA_DIR', '/data/somnia')) / 'harvest' / 'raw'
-        if raw_dir.exists():
-            state['harvest_backlog'] = sum(1 for f in raw_dir.glob('*.json'))
-        else:
-            state['harvest_backlog'] = 0
-    except Exception:
-        state['harvest_backlog'] = 0
-
-    # Time since last harvest (seconds)
-    try:
-        from conversation_harvester import load_harvest_state
-        hs = load_harvest_state()
-        last_h = hs.get('last_harvest_at')
-        if last_h:
-            last_dt = datetime.fromisoformat(last_h)
-            if last_dt.tzinfo is None:
-                last_dt = last_dt.replace(tzinfo=timezone.utc)
-            state['seconds_since_harvest'] = (
-                datetime.now(timezone.utc) - last_dt
-            ).total_seconds()
+        hs_path = Path('/data/workspaces/claude/findings/harvest_state.json')
+        if hs_path.exists():
+            import json as _json
+            hs = _json.loads(hs_path.read_text())
+            last_h = hs.get('last_harvest_at')
+            if last_h:
+                last_dt = datetime.fromisoformat(last_h)
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                state['seconds_since_harvest'] = (
+                    datetime.now(timezone.utc) - last_dt
+                ).total_seconds()
+            else:
+                state['seconds_since_harvest'] = float('inf')
         else:
             state['seconds_since_harvest'] = float('inf')
     except Exception:

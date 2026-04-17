@@ -1008,49 +1008,6 @@ def somnia_analytics(
         return f"Analytics unavailable: {e}"
 
 
-
-@mcp.tool()
-def somnia_harvest(
-    limit: int = 10,
-    force: bool = False
-) -> str:
-    """
-    Trigger a manual conversation harvest right now.
-
-    Mines recent Claude.ai conversations for memory-worthy observations
-    and drops them into the STM inbox for the next process cycle.
-    Normally runs automatically ~daily; use this to harvest mid-session
-    or after a conversation you know was substantive.
-
-    Args:
-        limit: Max conversations to mine in this run (default 10, max 50)
-        force:  If True, bypass the 20h cooldown and harvest immediately
-                even if a harvest ran recently
-    """
-    _record_activity("harvest_trigger", {"limit": limit, "force": force})
-    try:
-        resp = requests.post(
-            f"{API_BASE}/harvest/run",
-            json={"limit": min(limit, 50), "force": force},
-            timeout=30
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        lines = []
-        if data.get("skipped"):
-            lines.append(f"⏭ Harvest skipped: {data.get('reason', 'cooldown active')}")
-            lines.append("Use force=True to override.")
-        else:
-            processed = data.get("conversations_processed", 0)
-            observations = data.get("observations_added", 0)
-            lines.append(f"✅ Harvest complete: {processed} conversation(s) mined, "
-                         f"{observations} observation(s) added to STM inbox.")
-            if data.get("errors"):
-                lines.append(f"⚠ {len(data['errors'])} error(s): {data['errors'][0]}")
-        return "\n".join(lines)
-    except requests.RequestException as e:
-        return f"Harvest trigger failed: {e}"
-
 # =============================================================================
 # MAIN
 # =============================================================================
