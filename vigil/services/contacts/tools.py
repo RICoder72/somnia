@@ -2,8 +2,13 @@
 
 import json
 import logging
+
+from fastmcp import Context
+
 from .manager import ContactsManager
 from .adapters.gcontacts import GoogleContactsAdapter
+
+from core.binding_helpers import resolve_or_error
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +28,11 @@ def register(mcp) -> None:
         return
 
     @mcp.tool()
-    async def contacts_list(account: str, limit: int = 50) -> str:
-        """List contacts."""
+    async def contacts_list(ctx: Context, account: str = "", limit: int = 50) -> str:
+        """List contacts. Uses the active workspace's contacts binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "contacts")
+        if err:
+            return err
         page = await contacts_manager.list_contacts(account, limit)
         if not page.contacts:
             return f"No contacts found in {account}"
@@ -41,8 +49,11 @@ def register(mcp) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
-    async def contacts_search(account: str, query: str, limit: int = 20) -> str:
-        """Search contacts by name, email, or phone."""
+    async def contacts_search(ctx: Context, query: str, account: str = "", limit: int = 20) -> str:
+        """Search contacts by name, email, or phone. Uses the active workspace's contacts binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "contacts")
+        if err:
+            return err
         contacts = await contacts_manager.search_contacts(account, query, limit)
         if not contacts:
             return f"No contacts matching: {query}"
@@ -54,8 +65,11 @@ def register(mcp) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
-    async def contacts_get(account: str, contact_id: str) -> str:
-        """Get full contact details."""
+    async def contacts_get(ctx: Context, contact_id: str, account: str = "") -> str:
+        """Get full contact details. Uses the active workspace's contacts binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "contacts")
+        if err:
+            return err
         contact = await contacts_manager.get_contact(account, contact_id)
         if not contact:
             return f"Contact not found: {contact_id}"
@@ -93,7 +107,8 @@ def register(mcp) -> None:
 
     @mcp.tool()
     async def contacts_create(
-        account: str,
+        ctx: Context,
+        account: str = "",
         given_name: str = "",
         family_name: str = "",
         email: str = "",
@@ -102,7 +117,10 @@ def register(mcp) -> None:
         title: str = "",
         notes: str = ""
     ) -> str:
-        """Create a new contact."""
+        """Create a new contact. Uses the active workspace's contacts binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "contacts")
+        if err:
+            return err
         return await contacts_manager.create_contact(
             account,
             given_name=given_name or None,
@@ -116,8 +134,9 @@ def register(mcp) -> None:
 
     @mcp.tool()
     async def contacts_update(
-        account: str,
+        ctx: Context,
         contact_id: str,
+        account: str = "",
         given_name: str = None,
         family_name: str = None,
         email: str = None,
@@ -126,7 +145,10 @@ def register(mcp) -> None:
         title: str = None,
         notes: str = None
     ) -> str:
-        """Update an existing contact."""
+        """Update an existing contact. Uses the active workspace's contacts binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "contacts")
+        if err:
+            return err
         return await contacts_manager.update_contact(
             account, contact_id,
             given_name=given_name,
@@ -139,8 +161,11 @@ def register(mcp) -> None:
         )
 
     @mcp.tool()
-    async def contacts_delete(account: str, contact_id: str) -> str:
-        """Delete a contact."""
+    async def contacts_delete(ctx: Context, contact_id: str, account: str = "") -> str:
+        """Delete a contact. Uses the active workspace's contacts binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "contacts")
+        if err:
+            return err
         return await contacts_manager.delete_contact(account, contact_id)
 
     logger.info("✅ Registered 6 contacts tools")

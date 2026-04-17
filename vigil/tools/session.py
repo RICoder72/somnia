@@ -6,9 +6,10 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 
 from config import WORKSPACES_DIR, DATA_ROOT, DOMAIN_TRIGGERS_FILE
+from core.bindings import set_active_workspace
 
 SOMNIA_DB = DATA_ROOT / "somnia" / "db" / "somnia.db"
 
@@ -209,7 +210,7 @@ def register(mcp: FastMCP):
     }
 
     @mcp.tool()
-    def session_start(user_message: str = "") -> str:
+    async def session_start(ctx: Context, user_message: str = "") -> str:
         """Initialize a Vigil session with plugin and domain detection."""
         lines = ["🔭 Vigil Session Started", "─" * 40, ""]
 
@@ -241,6 +242,9 @@ def register(mcp: FastMCP):
             if detected:
                 lines.append(f"🎯 Auto-detected domain: {detected}")
                 lines.append("")
+
+        # ── Track active workspace for binding resolution ─────────
+        await set_active_workspace(ctx, detected)
 
         if detected:
             domain_path = WORKSPACES_DIR / detected

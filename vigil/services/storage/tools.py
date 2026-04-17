@@ -4,8 +4,11 @@ import json
 import logging
 from pathlib import Path
 
+from fastmcp import Context
+
 from config import CONFIG_DIR
 from core.paths import validate
+from core.binding_helpers import resolve_or_error
 from .manager import StorageManager
 from .adapters.gdrive import GoogleDriveProvider
 
@@ -29,8 +32,11 @@ def register(mcp) -> None:
         return
 
     @mcp.tool()
-    async def storage_list_files(account: str, path: str = "/") -> str:
-        """List files in a storage account."""
+    async def storage_list_files(ctx: Context, path: str = "/", account: str = "") -> str:
+        """List files in a storage account. Uses the active workspace's storage binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "storage")
+        if err:
+            return err
         files = await storage_manager.list_files(account, path)
         if not files:
             return f"No files found at {path}"
@@ -41,14 +47,20 @@ def register(mcp) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
-    async def storage_upload(account: str, local_path: str, remote_path: str) -> str:
-        """Upload a file to cloud storage."""
+    async def storage_upload(ctx: Context, local_path: str, remote_path: str, account: str = "") -> str:
+        """Upload a file to cloud storage. Uses the active workspace's storage binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "storage")
+        if err:
+            return err
         local = validate(local_path)
         return await storage_manager.upload(account, local, remote_path)
 
     @mcp.tool()
-    async def storage_download(account: str, remote_path: str, local_path: str) -> str:
-        """Download a file from cloud storage."""
+    async def storage_download(ctx: Context, remote_path: str, local_path: str, account: str = "") -> str:
+        """Download a file from cloud storage. Uses the active workspace's storage binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "storage")
+        if err:
+            return err
         local = validate(local_path)
         return await storage_manager.download(account, remote_path, local)
 

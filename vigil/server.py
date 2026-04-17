@@ -24,6 +24,7 @@ from tools.publishing import register as register_publishing
 from tools.shares import register as register_shares
 from tools.dashboard import register as register_dashboard
 from tools.session import register as register_session
+from tools.bindings_tool import register as register_bindings
 
 # Entity store tools (absorbed from Store)
 from tools.entities import register as register_entities
@@ -53,6 +54,7 @@ register_publishing(mcp)
 register_shares(mcp)
 register_dashboard(mcp)
 register_session(mcp)
+register_bindings(mcp)
 
 # ── Entity store (absorbed from Store) ──────────────────────────────────────
 register_entities(mcp)
