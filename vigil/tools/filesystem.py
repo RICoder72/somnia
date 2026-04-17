@@ -1,19 +1,32 @@
 """
 Filesystem tools — read, write, list, copy, move, delete, mkdir, rmdir, append.
+
+All tools accept an optional `workspace=""` override. When set, scope
+resolution uses that workspace instead of the session's active one —
+useful for cross-workspace operations (reading from _shared, migrations,
+etc.) without having to switch the active workspace.
+
+Relative paths resolve against the scope's default writable root when a
+workspace is active; otherwise against DATA_ROOT (legacy behavior).
+Absolute paths are taken as-is. All paths remain DATA_ROOT-sandboxed.
+
+Scope enforcement mode is controlled by config.SCOPE_MODE:
+  advisory (default) — violations log a warning, tool proceeds.
+  enforce            — violations raise ScopeViolationError, tool fails.
 """
 
 import shutil
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 
-from core.paths import validate
+from core.scope import validate_fs_read, validate_fs_write
 
 
 def register(mcp: FastMCP):
 
     @mcp.tool()
-    def fs_list(path: str = ".") -> str:
+    async def fs_list(ctx: Context, path: str = ".", workspace: str = "") -> str:
         """List directory contents."""
-        target = validate(path)
+        target = await validate_fs_read(ctx, path, workspace_override=workspace or None)
         if not target.exists():
             return f"❌ Path does not exist: {path}"
         if not target.is_dir():
@@ -32,9 +45,9 @@ def register(mcp: FastMCP):
         return f"{header}\n{listing}"
 
     @mcp.tool()
-    def fs_read(path: str) -> str:
+    async def fs_read(ctx: Context, path: str, workspace: str = "") -> str:
         """Read file contents."""
-        target = validate(path)
+        target = await validate_fs_read(ctx, path, workspace_override=workspace or None)
         if not target.exists():
             return f"❌ File does not exist: {path}"
         if not target.is_file():
@@ -45,26 +58,26 @@ def register(mcp: FastMCP):
             return f"❌ Cannot read binary file: {path}"
 
     @mcp.tool()
-    def fs_write(path: str, content: str) -> str:
+    async def fs_write(ctx: Context, path: str, content: str, workspace: str = "") -> str:
         """Write content to file. Creates parent directories if needed."""
-        target = validate(path)
+        target = await validate_fs_write(ctx, path, workspace_override=workspace or None)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
         return f"✅ Written: {path} ({len(content)} bytes)"
 
     @mcp.tool()
-    def fs_append(path: str, content: str) -> str:
+    async def fs_append(ctx: Context, path: str, content: str, workspace: str = "") -> str:
         """Append content to file. Creates file if it doesn't exist."""
-        target = validate(path)
+        target = await validate_fs_write(ctx, path, workspace_override=workspace or None)
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "a") as f:
             f.write(content)
         return f"✅ Appended to: {path} ({len(content)} bytes)"
 
     @mcp.tool()
-    def fs_delete(path: str) -> str:
+    async def fs_delete(ctx: Context, path: str, workspace: str = "") -> str:
         """Delete a file."""
-        target = validate(path)
+        target = await validate_fs_write(ctx, path, workspace_override=workspace or None)
         if not target.exists():
             return f"❌ Does not exist: {path}"
         if target.is_dir():
@@ -73,16 +86,16 @@ def register(mcp: FastMCP):
         return f"✅ Deleted: {path}"
 
     @mcp.tool()
-    def fs_mkdir(path: str) -> str:
+    async def fs_mkdir(ctx: Context, path: str, workspace: str = "") -> str:
         """Create directory (including parents)."""
-        target = validate(path)
+        target = await validate_fs_write(ctx, path, workspace_override=workspace or None)
         target.mkdir(parents=True, exist_ok=True)
         return f"✅ Created directory: {path}"
 
     @mcp.tool()
-    def fs_rmdir(path: str, force: bool = False) -> str:
+    async def fs_rmdir(ctx: Context, path: str, force: bool = False, workspace: str = "") -> str:
         """Remove directory."""
-        target = validate(path)
+        target = await validate_fs_write(ctx, path, workspace_override=workspace or None)
         if not target.exists():
             return f"❌ Does not exist: {path}"
         if not target.is_dir():
@@ -98,20 +111,29 @@ def register(mcp: FastMCP):
             return f"✅ Removed directory: {path}"
 
     @mcp.tool()
-    def fs_move(source: str, destination: str) -> str:
-        """Move or rename file/directory."""
-        src = validate(source)
-        dst = validate(destination)
+    async def fs_move(ctx: Context, source: str, destination: str, workspace: str = "") -> str:
+        """Move or rename file/directory.
+
+        Both source and destination are scope-checked for write (since a move
+        invalidates the old path and creates the new one).
+        """
+        src = await validate_fs_write(ctx, source, workspace_override=workspace or None)
+        dst = await validate_fs_write(ctx, destination, workspace_override=workspace or None)
         if not src.exists():
             return f"❌ Source does not exist: {source}"
         src.rename(dst)
         return f"✅ Moved: {source} → {destination}"
 
     @mcp.tool()
-    def fs_copy(source: str, destination: str) -> str:
-        """Copy file or directory."""
-        src = validate(source)
-        dst = validate(destination)
+    async def fs_copy(ctx: Context, source: str, destination: str, workspace: str = "") -> str:
+        """Copy file or directory.
+
+        Source is scope-checked for read, destination for write — supports
+        the common case of copying from _shared or another readable root
+        into the active workspace.
+        """
+        src = await validate_fs_read(ctx, source, workspace_override=workspace or None)
+        dst = await validate_fs_write(ctx, destination, workspace_override=workspace or None)
         if not src.exists():
             return f"❌ Source does not exist: {source}"
 

@@ -1,27 +1,43 @@
-"""Entity CRUD tools — part of the Somnia/Vigil Store."""
+"""Entity CRUD tools — part of the Somnia/Vigil Store.
+
+Store tools accept `domain=""` to defer to the active workspace's
+default_domain, and `workspace=""` to override which workspace to
+resolve against. When neither is set and there's no active workspace,
+domain must be passed explicitly.
+
+Scope enforcement mode is controlled by config.SCOPE_MODE.
+"""
 
 import json
 import uuid
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 from core.db import get_pool
+from core.scope import resolve_domain
 
 
 def register(mcp: FastMCP):
 
     @mcp.tool()
     async def store_create_entity(
-        domain: str,
+        ctx: Context,
         entity_type: str,
         name: str,
         properties: str = "{}",
+        domain: str = "",
+        workspace: str = "",
     ) -> str:
         """Create a new entity in a domain.
 
         Args:
-            domain: Domain scope (e.g. "projects", "inventory")
             entity_type: Type of entity (e.g. "task", "item")
             name: Display name for the entity
-            properties: JSON string of entity properties"""
+            properties: JSON string of entity properties
+            domain: Domain scope. Empty string defers to the active
+                workspace's default_domain (scope resolution).
+            workspace: Override which workspace scope resolves against."""
+        resolved_domain = await resolve_domain(ctx, domain, workspace_override=workspace or None)
+        if not resolved_domain:
+            return json.dumps({"error": "No domain: pass domain= explicitly or activate a workspace"})
         props = json.loads(properties)
         pool = await get_pool()
         row = await pool.fetchrow(
@@ -31,21 +47,30 @@ def register(mcp: FastMCP):
             RETURNING id, domain, entity_type, name, properties,
                       archived, created_at, updated_at
             """,
-            domain, entity_type, name, json.dumps(props),
+            resolved_domain, entity_type, name, json.dumps(props),
         )
         return json.dumps(_entity_to_dict(row), default=str)
 
     @mcp.tool()
-    async def store_get_entity(domain: str, entity_id: str) -> str:
+    async def store_get_entity(
+        ctx: Context,
+        entity_id: str,
+        domain: str = "",
+        workspace: str = "",
+    ) -> str:
         """Get a single entity by ID.
 
         Args:
-            domain: Domain scope
-            entity_id: UUID of the entity"""
+            entity_id: UUID of the entity
+            domain: Domain scope (empty → workspace default)
+            workspace: Override active workspace for scope resolution"""
+        resolved_domain = await resolve_domain(ctx, domain, workspace_override=workspace or None)
+        if not resolved_domain:
+            return json.dumps({"error": "No domain: pass domain= explicitly or activate a workspace"})
         pool = await get_pool()
         row = await pool.fetchrow(
             "SELECT * FROM entities WHERE id = $1 AND domain = $2",
-            uuid.UUID(entity_id), domain,
+            uuid.UUID(entity_id), resolved_domain,
         )
         if not row:
             return json.dumps({"error": "Entity not found"})
@@ -53,24 +78,30 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def store_update_entity(
-        domain: str,
+        ctx: Context,
         entity_id: str,
         name: str | None = None,
         properties: str | None = None,
         entity_type: str | None = None,
+        domain: str = "",
+        workspace: str = "",
     ) -> str:
-        """Update an entity. Properties are shallow-merged (existing keys preserved unless overwritten).
+        """Update an entity. Properties are shallow-merged.
 
         Args:
-            domain: Domain scope
             entity_id: UUID of the entity
             name: New name (optional)
             properties: JSON string of properties to merge (optional)
-            entity_type: New entity type (optional)"""
+            entity_type: New entity type (optional)
+            domain: Domain scope (empty → workspace default)
+            workspace: Override active workspace for scope resolution"""
+        resolved_domain = await resolve_domain(ctx, domain, workspace_override=workspace or None)
+        if not resolved_domain:
+            return json.dumps({"error": "No domain: pass domain= explicitly or activate a workspace"})
         pool = await get_pool()
         eid = uuid.UUID(entity_id)
 
-        sets, params = [], [eid, domain]
+        sets, params = [], [eid, resolved_domain]
         idx = 3
 
         if name is not None:
@@ -95,12 +126,21 @@ def register(mcp: FastMCP):
         return json.dumps(_entity_to_dict(row), default=str)
 
     @mcp.tool()
-    async def store_archive_entity(domain: str, entity_id: str) -> str:
+    async def store_archive_entity(
+        ctx: Context,
+        entity_id: str,
+        domain: str = "",
+        workspace: str = "",
+    ) -> str:
         """Soft-delete an entity by marking it as archived.
 
         Args:
-            domain: Domain scope
-            entity_id: UUID of the entity"""
+            entity_id: UUID of the entity
+            domain: Domain scope (empty → workspace default)
+            workspace: Override active workspace for scope resolution"""
+        resolved_domain = await resolve_domain(ctx, domain, workspace_override=workspace or None)
+        if not resolved_domain:
+            return json.dumps({"error": "No domain: pass domain= explicitly or activate a workspace"})
         pool = await get_pool()
         row = await pool.fetchrow(
             """
@@ -109,7 +149,7 @@ def register(mcp: FastMCP):
             RETURNING id, domain, entity_type, name, properties,
                       archived, created_at, updated_at
             """,
-            uuid.UUID(entity_id), domain,
+            uuid.UUID(entity_id), resolved_domain,
         )
         if not row:
             return json.dumps({"error": "Entity not found or already archived"})
@@ -117,25 +157,31 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def store_query_entities(
-        domain: str,
+        ctx: Context,
         entity_type: str | None = None,
         properties_filter: str | None = None,
         include_archived: bool = False,
         limit: int = 50,
         offset: int = 0,
+        domain: str = "",
+        workspace: str = "",
     ) -> str:
         """Query entities with optional type and property filters.
 
         Args:
-            domain: Domain scope
             entity_type: Filter by entity type (optional)
             properties_filter: JSON string for JSONB containment filter (optional)
             include_archived: Include archived entities (default false)
             limit: Max results (default 50)
-            offset: Pagination offset (default 0)"""
+            offset: Pagination offset (default 0)
+            domain: Domain scope (empty → workspace default)
+            workspace: Override active workspace for scope resolution"""
+        resolved_domain = await resolve_domain(ctx, domain, workspace_override=workspace or None)
+        if not resolved_domain:
+            return json.dumps({"error": "No domain: pass domain= explicitly or activate a workspace"})
         pool = await get_pool()
         conditions = ["domain = $1"]
-        params: list = [domain]
+        params: list = [resolved_domain]
         idx = 2
 
         if not include_archived:
