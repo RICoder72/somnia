@@ -2,11 +2,19 @@
 Somnia Portal — collaborative document and reports portal.
 Serves at /portal, behind OAuth via nginx auth_request.
 
-Landing page is manifest-driven — reads outputs/portal-manifest.json
-written by Somnia (via somnia_provision or dream post-processing).
+The landing page reads live from Quies's /portal/bundle endpoint on every
+request. If Quies is unreachable, Portal falls back to the cached
+portal-manifest.json that Quies writes after every dream cycle — so a
+Quies outage degrades gracefully to last-dream staleness instead of a
+blank page.
+
+Per-domain lookups (file browser, reports, data pages) read label/icon/
+docs_path from the cached manifest, since those change rarely and
+per-request round-trips would be wasteful. The manifest stays as the
+durable cache; the landing page is what needed live data, and now has it.
 
 Routes:
-  GET  /portal/                         Landing page (manifest-driven)
+  GET  /portal/                         Landing page (live from Quies)
   GET  /portal/files/{domain}           File browser (HTML)
   GET  /portal/api/files/{domain}       List files (JSON), ?path= for subdirs
   GET  /portal/api/download/{domain}    Download file, ?path=
@@ -76,12 +84,44 @@ QUIES_API = os.environ.get("QUIES_API_URL", "http://quies:8010")
 # Data loaders
 # ---------------------------------------------------------------------------
 
-def load_manifest() -> dict:
-    """Load portal-manifest.json written by somnia_provision / Quies."""
+def load_manifest_file() -> dict:
+    """Load the cached portal-manifest.json. Emergency fallback only.
+
+    Quies writes this after every dream cycle. The live /portal/bundle
+    endpoint is the preferred source for the landing page; this file is
+    what Portal reads when Quies is unreachable, and what get_domain_info
+    reads for per-domain label/icon/docs_path lookups (since those change
+    rarely and a round-trip per request would be wasteful).
+    """
     try:
         return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     except Exception:
         return {"pinned_nodes": [], "somnia_health": {}, "solo_work": [], "recent_dreams": []}
+
+
+async def fetch_portal_bundle() -> tuple[dict, str]:
+    """Fetch the live landing-page bundle from Quies.
+
+    Returns (bundle, source) where source is one of:
+      - "live"   — fresh from Quies
+      - "cached" — read from manifest file because Quies was unreachable
+      - "empty"  — neither Quies nor the cached manifest was available
+    """
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"{QUIES_API}/portal/bundle")
+            r.raise_for_status()
+            data = r.json()
+            if "error" in data:
+                raise RuntimeError(data["error"])
+            return data, "live"
+    except Exception:
+        pass  # fall through to cached manifest
+
+    cached = load_manifest_file()
+    if cached.get("pinned_nodes") or cached.get("somnia_health"):
+        return cached, "cached"
+    return cached, "empty"
 
 
 def load_queries() -> list:
@@ -93,11 +133,17 @@ def load_queries() -> list:
 
 def get_domain_info(domain: str) -> dict:
     """
-    Look up a domain from the manifest.
+    Look up a domain from the cached manifest.
+
+    Per-domain fields (label, icon, docs_path) change rarely, so this
+    stays synchronous and reads the cached manifest file rather than
+    hitting Quies on every file-browser click. Fresh landing data lives
+    on the live bundle path; this is the stable-reference path.
+
     Falls back to portal.json for backwards compatibility.
     Raises 404 if not found in either source.
     """
-    manifest = load_manifest()
+    manifest = load_manifest_file()
     for node in manifest.get("pinned_nodes", []):
         if node["id"] == domain:
             return {
@@ -410,11 +456,11 @@ async def portal_logs(level: str = "error", limit: int = 30):
 @app.get("/portal", response_class=HTMLResponse)
 @app.get("/portal/", response_class=HTMLResponse)
 async def landing():
-    manifest = load_manifest()
-    nodes = manifest.get("pinned_nodes", [])
-    health = manifest.get("somnia_health", {})
-    solo_work = manifest.get("solo_work", [])
-    generated_at = manifest.get("generated_at", "")
+    bundle, source = await fetch_portal_bundle()
+    nodes = bundle.get("pinned_nodes", [])
+    health = bundle.get("somnia_health", {})
+    solo_work = bundle.get("solo_work", [])
+    generated_at = bundle.get("generated_at", "")
     generated_rel = relative_time(generated_at)
 
     # ── Node cards ────────────────────────────────────────────────────
@@ -538,22 +584,39 @@ async def landing():
     if not findings_html:
         findings_html = '<p style="color:var(--muted);font-size:13px;padding:8px 0">No recent solo-work findings.</p>'
 
-    # ── Stale manifest warning ────────────────────────────────────────
+    # ── Data source indicator ─────────────────────────────────────────
+    # When source=="live", the page was rendered from a fresh Quies call.
+    # When source=="cached", Quies was unreachable and we fell back to the
+    # manifest file written at the last dream cycle — show a warning so
+    # the user knows the data may be stale.
     stale_warn = ""
-    if generated_at:
-        try:
-            from datetime import timezone
-            dt = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
-            age_hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
-            if age_hours > 6:
-                stale_warn = f'<div class="alert" style="background:var(--surface);border:1px solid var(--warn)44;color:var(--warn);font-size:12px;margin-top:16px">⚠ Manifest last updated {generated_rel}. Run <code>somnia_provision(refresh_manifest_only=True)</code> to refresh.</div>'
-        except Exception:
-            pass
+    if source == "cached":
+        stale_warn = (
+            f'<div class="alert" style="background:var(--surface);border:1px solid var(--warn)44;color:var(--warn);font-size:12px;margin-top:16px">'
+            f'⚠ Quies is unreachable — showing cached manifest from {generated_rel or "unknown time"}. '
+            f'The landing page will refresh automatically once Quies is back.'
+            f'</div>'
+        )
+    elif source == "empty":
+        stale_warn = (
+            '<div class="alert" style="background:var(--surface);border:1px solid var(--danger)44;color:var(--danger);font-size:12px;margin-top:16px">'
+            '⚠ No portal data available — Quies is unreachable and no cached manifest was found. '
+            'Check container health via <code>fleet_status</code>.'
+            '</div>'
+        )
+
+    # Source label shown next to the title: "live" | "cached {time}" | "unavailable"
+    if source == "live":
+        source_label = '<span style="color:var(--accent2);font-size:12px;font-family:var(--mono)" title="Read live from Quies">● live</span>'
+    elif source == "cached":
+        source_label = f'<span style="color:var(--warn);font-size:12px;font-family:var(--mono)" title="Quies unreachable; cached manifest from {generated_at}">● cached {generated_rel}</span>'
+    else:
+        source_label = '<span style="color:var(--danger);font-size:12px;font-family:var(--mono)">● unavailable</span>'
 
     body = f"""
     <div style="margin-bottom: 8px; display:flex; align-items:baseline; gap:12px;">
       <h1>Somnia Portal</h1>
-      <span style="color:var(--muted);font-size:12px;font-family:var(--mono)">manifest {generated_rel}</span>
+      {source_label}
     </div>
     <p style="color:var(--muted);margin-bottom:4px;font-size:13px">Documents, reports, and memory — all in one place.</p>
     {stale_warn}
@@ -1298,4 +1361,16 @@ async def serve_share(uuid: str):
 
 @app.get("/portal/health")
 async def health():
-    return {"status": "ok", "service": "portal", "manifest": MANIFEST_PATH.exists()}
+    quies_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(f"{QUIES_API}/")
+            quies_ok = r.status_code < 500
+    except Exception:
+        pass
+    return {
+        "status": "ok",
+        "service": "portal",
+        "manifest_cache": MANIFEST_PATH.exists(),
+        "quies_reachable": quies_ok,
+    }

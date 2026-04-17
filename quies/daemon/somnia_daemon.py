@@ -2391,17 +2391,196 @@ def _apply_archaeology_results(results_json, dream_id):
 # DREAM SCHEDULER
 # ============================================================================
 
+# ----------------------------------------------------------------------------
+# Portal data builders
+#
+# These pure functions read the current state (postgres + solo-work files) and
+# return the same shapes that go into portal-manifest.json. They're called
+# both by _refresh_portal_manifest (to write the JSON cache after dreams) and
+# by the /portal/* HTTP endpoints below (so the Portal UI can read live data
+# on every request). If you change a shape here, both the manifest file and
+# the live endpoints change in lockstep — that's the point.
+# ----------------------------------------------------------------------------
+
+def _build_portal_nodes():
+    """Read pinned, portal-visible, provisioned nodes from the graph."""
+    pinned_rows = execute("""
+        SELECT id, content, metadata, last_accessed, decay_state
+        FROM nodes WHERE pinned = TRUE
+        ORDER BY last_accessed DESC NULLS LAST
+    """, fetch='all') or []
+
+    portal_nodes = []
+    for row in pinned_rows:
+        meta = row.get('metadata') or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        if not meta.get('portal_visible') or not meta.get('provisioned'):
+            continue
+        last_accessed = _to_datetime(row.get('last_accessed'))
+        portal_nodes.append({
+            "id": row['id'],
+            "name": meta.get('name', row['id'].replace('-', ' ').title()),
+            "description": meta.get('description', (row.get('content') or '')[:120]),
+            "icon": meta.get('icon', '📁'),
+            "status": meta.get('status', ''),
+            "decay": round(row.get('decay_state', 1.0), 2),
+            "portal_visible": True,
+            "needs_store": meta.get('needs_store', False),
+            "store_ready": meta.get('store_ready', False),
+            "provisioned": True,
+            "docs_path": meta.get('docs_path', f"workspaces/{row['id']}"),
+            "store_domain": meta.get('store_domain', ''),
+            "last_activity": last_accessed.strftime("%Y-%m-%d") if last_accessed else "",
+            "last_provisioned": meta.get('last_provisioned', ''),
+            "has_collab_space": meta.get('has_collab_space', True),
+        })
+    return portal_nodes
+
+
+def _build_portal_health():
+    """Build the somnia_health dict — graph stats + budget + error counts."""
+    stats = get_graph_stats()
+    daily_cost = get_daily_cost()
+    budget_cfg = CONFIG.get('budget', {})
+    daily_cap = budget_cfg.get('max_cost_per_day', 2.00)
+
+    error_rows = execute(
+        "SELECT level, COUNT(*) as count FROM system_log "
+        "WHERE timestamp >= NOW() - INTERVAL '24 hours' GROUP BY level",
+        fetch='all') or []
+    error_counts = {r['level']: r['count'] for r in error_rows}
+
+    last_dream_row = execute(
+        "SELECT ended_at FROM dream_log WHERE interrupted = FALSE "
+        "ORDER BY ended_at DESC LIMIT 1", fetch='one') or {}
+    last_ended = last_dream_row.get('ended_at', '')
+    last_dream_at = last_ended.isoformat() if hasattr(last_ended, 'isoformat') else str(last_ended) if last_ended else ''
+
+    dreams_7d_row = execute(
+        "SELECT COUNT(*) as count FROM dream_log "
+        "WHERE ended_at >= NOW() - INTERVAL '7 days' AND interrupted = FALSE",
+        fetch='one') or {}
+    dreams_7d = dreams_7d_row.get('count', 0)
+
+    return {
+        "node_count": stats.get('node_count', 0),
+        "edge_count": stats.get('edge_count', 0),
+        "inbox_depth": stats.get('inbox_pending', 0),
+        "pinned_count": stats.get('pinned_count', 0),
+        "avg_decay": round(stats.get('avg_decay', 1.0), 3),
+        "errors_24h": error_counts.get('error', 0),
+        "warnings_24h": error_counts.get('warning', 0),
+        "last_dream_at": last_dream_at,
+        "daily_cost_usd": round(daily_cost, 4),
+        "daily_cap_usd": round(daily_cap, 2),
+        "dreams_last_7d": int(dreams_7d),
+    }
+
+
+def _build_portal_dreams(limit=10):
+    """Recent completed dreams, newest first."""
+    dream_rows = execute(
+        "SELECT id, summary, ended_at, nodes_created, edges_created "
+        "FROM dream_log WHERE interrupted = FALSE "
+        "ORDER BY ended_at DESC LIMIT %s",
+        (limit,), fetch='all') or []
+
+    dream_summaries = []
+    for d in dream_rows:
+        raw_summary = d.get('summary', '') or ''
+        mode_str = 'solo_work' if '[solo_work]' in raw_summary else \
+                   'ruminate' if '[ruminate]' in raw_summary else 'process'
+        nodes_c = d.get('nodes_created') or []
+        edges_c = d.get('edges_created') or []
+        if isinstance(nodes_c, str):
+            try: nodes_c = json.loads(nodes_c)
+            except: nodes_c = []
+        if isinstance(edges_c, str):
+            try: edges_c = json.loads(edges_c)
+            except: edges_c = []
+        ended = d.get('ended_at')
+        ended_str = ended.isoformat() if hasattr(ended, 'isoformat') else str(ended) if ended else ''
+        dream_summaries.append({
+            "dream_id": str(d.get('id', '')),
+            "mode": mode_str,
+            "ended_at": ended_str,
+            "duration_seconds": 0,
+            "summary": raw_summary[:200],
+            "nodes_created": len(nodes_c),
+            "edges_created": len(edges_c),
+        })
+    return dream_summaries
+
+
+def _build_portal_solo_work(limit=None, days=14):
+    """Solo-work entries from disk, newest first. Optionally cap at `limit`."""
+    from datetime import timezone as _tz
+    import re as _re
+
+    solo_work_entries = []
+    solo_dir = SOLO_WORK_DIR
+    if not solo_dir.exists():
+        return solo_work_entries
+
+    cutoff_dt = datetime.now(_tz.utc)
+    for f in sorted(solo_dir.glob("solo-work-*.md"), reverse=True):
+        if limit is not None and len(solo_work_entries) >= limit:
+            break
+        fname = f.name
+        date_match = _re.search(r'(\d{4}-\d{2}-\d{2})_(\d{4})', fname)
+        date_str = date_match.group(1) if date_match else ''
+        time_str = date_match.group(2) if date_match else ''
+        if date_str:
+            try:
+                file_dt = datetime.fromisoformat(date_str).replace(tzinfo=_tz.utc)
+                if (cutoff_dt - file_dt).days > days:
+                    break
+            except Exception:
+                pass
+        try:
+            txt = f.read_text(encoding='utf-8')
+        except OSError:
+            continue
+        summary_m = _re.search(r'\*\*Summary:\*\*\s*(.+)', txt)
+        summary_str = summary_m.group(1).strip() if summary_m else ''
+        pinned_m = _re.search(r'\*\*Pinned nodes reviewed:\*\*\s*(.+)', txt)
+        pinned_rev = [x.strip() for x in pinned_m.group(1).split(',')] if pinned_m else []
+        findings_count = len(_re.findall(r'^##\s+[^#]', txt, _re.MULTILINE))
+        sig_order = {'critical': 4, 'important': 3, 'interesting': 2, 'minor': 1}
+        found_sigs = _re.findall(r'\*\*Significance:\*\*\s*(\w+)', txt)
+        max_sig_val = max((sig_order.get(s.lower(), 0) for s in found_sigs), default=0)
+        sig_rev = {v: k for k, v in sig_order.items()}
+        solo_work_entries.append({
+            "filename": fname,
+            "path": str(SOLO_WORK_DIR.relative_to(Path("/data")) / fname) if SOLO_WORK_DIR.is_relative_to(Path("/data")) else f"somnia/solo-work/{fname}",
+            "date": date_str,
+            "time": time_str,
+            "summary": summary_str,
+            "pinned_nodes_reviewed": pinned_rev,
+            "findings_count": findings_count,
+            "max_significance": sig_rev.get(max_sig_val, ''),
+        })
+    return solo_work_entries
+
+
 def _refresh_portal_manifest(dream_id=None):
     """
     Rebuild outputs/portal-manifest.json after a dream cycle.
 
     Runs at the end of every successful run_consolidation().
     Fails silently if /data/outputs is not mounted — never breaks a dream.
-    Reads pinned nodes, graph stats, dream history, and solo-work files
-    directly from DB/filesystem — no HTTP calls.
+
+    As of the portal live-data migration, the manifest is an *emergency
+    fallback cache* — Portal reads live from the /portal/* HTTP endpoints
+    on every page load, and only falls back to this file when Quies is
+    unreachable. Keeping the writer means a Quies outage degrades to
+    last-dream-cycle staleness instead of a blank Portal.
     """
     from datetime import timezone as _tz
-    import re as _re
 
     OUTPUTS_DIR = Path("/data/outputs")
     MANIFEST_PATH = OUTPUTS_DIR / "portal-manifest.json"
@@ -2412,153 +2591,11 @@ def _refresh_portal_manifest(dream_id=None):
 
     try:
         now = datetime.now(_tz.utc).isoformat()
+        portal_nodes = _build_portal_nodes()
+        health = _build_portal_health()
+        dream_summaries = _build_portal_dreams(limit=10)
+        solo_work_entries = _build_portal_solo_work()
 
-        # ── Pinned nodes ──────────────────────────────────────────────
-        pinned_rows = execute("""
-            SELECT id, content, metadata, last_accessed, decay_state
-            FROM nodes WHERE pinned = TRUE
-            ORDER BY last_accessed DESC NULLS LAST
-        """, fetch='all') or []
-
-        portal_nodes = []
-        for row in pinned_rows:
-            meta = row.get('metadata') or {}
-            if isinstance(meta, str):
-                try:
-                    meta = json.loads(meta)
-                except Exception:
-                    meta = {}
-            if not meta.get('portal_visible') or not meta.get('provisioned'):
-                continue
-            last_accessed = _to_datetime(row.get('last_accessed'))
-            portal_nodes.append({
-                "id": row['id'],
-                "name": meta.get('name', row['id'].replace('-', ' ').title()),
-                "description": meta.get('description', (row.get('content') or '')[:120]),
-                "icon": meta.get('icon', '📁'),
-                "status": meta.get('status', ''),
-                "decay": round(row.get('decay_state', 1.0), 2),
-                "portal_visible": True,
-                "needs_store": meta.get('needs_store', False),
-                "store_ready": meta.get('store_ready', False),
-                "provisioned": True,
-                "docs_path": meta.get('docs_path', f"workspaces/{row['id']}"),
-                "store_domain": meta.get('store_domain', ''),
-                "last_activity": last_accessed.strftime("%Y-%m-%d") if last_accessed else "",
-                "last_provisioned": meta.get('last_provisioned', ''),
-            })
-
-        # ── Graph health ──────────────────────────────────────────────
-        stats = get_graph_stats()
-        daily_cost = get_daily_cost()
-        budget_cfg = CONFIG.get('budget', {})
-        daily_cap = budget_cfg.get('max_cost_per_day', 2.00)
-
-        error_rows = execute(
-            "SELECT level, COUNT(*) as count FROM system_log "
-            "WHERE timestamp >= NOW() - INTERVAL '24 hours' GROUP BY level",
-            fetch='all') or []
-        error_counts = {r['level']: r['count'] for r in error_rows}
-
-        last_dream_row = execute(
-            "SELECT ended_at FROM dream_log WHERE interrupted = FALSE "
-            "ORDER BY ended_at DESC LIMIT 1", fetch='one') or {}
-        last_ended = last_dream_row.get('ended_at', '')
-        last_dream_at = last_ended.isoformat() if hasattr(last_ended, 'isoformat') else str(last_ended) if last_ended else ''
-
-        dreams_7d_row = execute(
-            "SELECT COUNT(*) as count FROM dream_log "
-            "WHERE ended_at >= NOW() - INTERVAL '7 days' AND interrupted = FALSE",
-            fetch='one') or {}
-        dreams_7d = dreams_7d_row.get('count', 0)
-
-        health = {
-            "node_count": stats.get('node_count', 0),
-            "edge_count": stats.get('edge_count', 0),
-            "inbox_depth": stats.get('inbox_pending', 0),
-            "pinned_count": stats.get('pinned_count', 0),
-            "avg_decay": round(stats.get('avg_decay', 1.0), 3),
-            "errors_24h": error_counts.get('error', 0),
-            "warnings_24h": error_counts.get('warning', 0),
-            "last_dream_at": last_dream_at,
-            "daily_cost_usd": round(daily_cost, 4),
-            "daily_cap_usd": round(daily_cap, 2),
-            "dreams_last_7d": int(dreams_7d),
-        }
-
-        # ── Recent dreams (up to 10) ──────────────────────────────────
-        dream_rows = execute(
-            "SELECT id, summary, ended_at, nodes_created, edges_created "
-            "FROM dream_log WHERE interrupted = FALSE "
-            "ORDER BY ended_at DESC LIMIT 10",
-            fetch='all') or []
-
-        dream_summaries = []
-        for d in dream_rows:
-            raw_summary = d.get('summary', '') or ''
-            mode_str = 'solo_work' if '[solo_work]' in raw_summary else                        'ruminate' if '[ruminate]' in raw_summary else 'process'
-            nodes_c = d.get('nodes_created') or []
-            edges_c = d.get('edges_created') or []
-            if isinstance(nodes_c, str):
-                try: nodes_c = json.loads(nodes_c)
-                except: nodes_c = []
-            if isinstance(edges_c, str):
-                try: edges_c = json.loads(edges_c)
-                except: edges_c = []
-            ended = d.get('ended_at')
-            ended_str = ended.isoformat() if hasattr(ended, 'isoformat') else str(ended) if ended else ''
-            dream_summaries.append({
-                "dream_id": str(d.get('id', '')),
-                "mode": mode_str,
-                "ended_at": ended_str,
-                "duration_seconds": 0,
-                "summary": raw_summary[:200],
-                "nodes_created": len(nodes_c),
-                "edges_created": len(edges_c),
-            })
-
-        # ── Solo-work entries (last 14 days) ──────────────────────────
-        solo_work_entries = []
-        solo_dir = SOLO_WORK_DIR
-        if solo_dir.exists():
-            cutoff_dt = datetime.now(_tz.utc)
-            for f in sorted(solo_dir.glob("solo-work-*.md"), reverse=True):
-                fname = f.name
-                date_match = _re.search(r'(\d{4}-\d{2}-\d{2})_(\d{4})', fname)
-                date_str = date_match.group(1) if date_match else ''
-                time_str = date_match.group(2) if date_match else ''
-                if date_str:
-                    try:
-                        file_dt = datetime.fromisoformat(date_str).replace(tzinfo=_tz.utc)
-                        if (cutoff_dt - file_dt).days > 14:
-                            break
-                    except Exception:
-                        pass
-                try:
-                    txt = f.read_text(encoding='utf-8')
-                except OSError:
-                    continue
-                summary_m = _re.search(r'\*\*Summary:\*\*\s*(.+)', txt)
-                summary_str = summary_m.group(1).strip() if summary_m else ''
-                pinned_m = _re.search(r'\*\*Pinned nodes reviewed:\*\*\s*(.+)', txt)
-                pinned_rev = [x.strip() for x in pinned_m.group(1).split(',')] if pinned_m else []
-                findings_count = len(_re.findall(r'^##\s+[^#]', txt, _re.MULTILINE))
-                sig_order = {'critical': 4, 'important': 3, 'interesting': 2, 'minor': 1}
-                found_sigs = _re.findall(r'\*\*Significance:\*\*\s*(\w+)', txt)
-                max_sig_val = max((sig_order.get(s.lower(), 0) for s in found_sigs), default=0)
-                sig_rev = {v: k for k, v in sig_order.items()}
-                solo_work_entries.append({
-                    "filename": fname,
-                    "path": str(SOLO_WORK_DIR.relative_to(Path("/data")) / fname) if SOLO_WORK_DIR.is_relative_to(Path("/data")) else f"somnia/solo-work/{fname}",
-                    "date": date_str,
-                    "time": time_str,
-                    "summary": summary_str,
-                    "pinned_nodes_reviewed": pinned_rev,
-                    "findings_count": findings_count,
-                    "max_significance": sig_rev.get(max_sig_val, ''),
-                })
-
-        # ── Write manifest ────────────────────────────────────────────
         manifest = {
             "schema_version": "1.0",
             "generated_at": now,
@@ -3597,6 +3634,75 @@ def system_logs():
         "summary": counts,
         "logs": logs
     })
+
+
+# ============================================================================
+# PORTAL LIVE DATA ENDPOINTS
+#
+# Portal reads these on every page load so its landing stays fresh without
+# waiting for a dream cycle to rewrite portal-manifest.json. The manifest
+# file is still written by _refresh_portal_manifest after every dream as an
+# emergency fallback cache. Shape parity with that manifest is intentional:
+# if Quies is down, Portal's fallback to the cached file JustWorks™.
+# ============================================================================
+
+@app.route("/portal/nodes", methods=["GET"])
+def portal_nodes():
+    """Live pinned-node list for the Portal landing page."""
+    try:
+        nodes = _build_portal_nodes()
+        return jsonify({"nodes": nodes, "count": len(nodes)})
+    except Exception as e:
+        logger.warning(f"/portal/nodes failed: {e}")
+        return jsonify({"error": str(e), "nodes": []}), 500
+
+
+@app.route("/portal/health", methods=["GET"])
+def portal_health():
+    """Live graph + budget health for the Portal landing page."""
+    try:
+        return jsonify({"health": _build_portal_health()})
+    except Exception as e:
+        logger.warning(f"/portal/health failed: {e}")
+        return jsonify({"error": str(e), "health": {}}), 500
+
+
+@app.route("/portal/solo_work", methods=["GET"])
+def portal_solo_work():
+    """Recent solo-work findings, newest first. Optional ?limit=N&days=M."""
+    limit = request.args.get("limit", type=int)
+    days = request.args.get("days", 14, type=int)
+    try:
+        entries = _build_portal_solo_work(limit=limit, days=days)
+        return jsonify({"solo_work": entries, "count": len(entries)})
+    except Exception as e:
+        logger.warning(f"/portal/solo_work failed: {e}")
+        return jsonify({"error": str(e), "solo_work": []}), 500
+
+
+@app.route("/portal/bundle", methods=["GET"])
+def portal_bundle():
+    """
+    One-shot fetch of everything the Portal landing page needs.
+
+    Single round-trip replaces three separate calls. Returned shape matches
+    portal-manifest.json's top-level keys so Portal can use the same render
+    path whether this is live or a fallback-cache read.
+    """
+    from datetime import timezone as _tz
+    try:
+        return jsonify({
+            "schema_version": "1.0",
+            "generated_at": datetime.now(_tz.utc).isoformat(),
+            "generated_by": "quies/live",
+            "pinned_nodes": _build_portal_nodes(),
+            "somnia_health": _build_portal_health(),
+            "solo_work": _build_portal_solo_work(limit=20),
+            "recent_dreams": _build_portal_dreams(limit=10),
+        })
+    except Exception as e:
+        logger.warning(f"/portal/bundle failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/debug/cli-test", methods=["POST"])
