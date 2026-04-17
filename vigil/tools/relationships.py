@@ -1,42 +1,54 @@
-"""Relationship tools — part of the Somnia/Vigil Store."""
+"""Relationship tools — part of the Somnia/Vigil Store.
+
+Like entities.py, these accept `domain=""` to defer to the active
+workspace's default_domain, and `workspace=""` to override which
+workspace to resolve scope against.
+"""
 
 import json
 import uuid
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 from core.db import get_pool
+from core.scope import resolve_domain
 
 
 def register(mcp: FastMCP):
 
     @mcp.tool()
     async def store_relate_entities(
-        domain: str,
+        ctx: Context,
         source_id: str,
         target_id: str,
         relationship_type: str,
         properties: str = "{}",
+        domain: str = "",
+        workspace: str = "",
     ) -> str:
         """Create a relationship between two entities.
 
         Args:
-            domain: Domain scope
             source_id: UUID of the source entity
             target_id: UUID of the target entity
             relationship_type: Type of relationship (e.g. "depends_on", "contains")
-            properties: JSON string of relationship properties"""
+            properties: JSON string of relationship properties
+            domain: Domain scope (empty → workspace default)
+            workspace: Override active workspace for scope resolution"""
+        resolved_domain = await resolve_domain(ctx, domain, workspace_override=workspace or None)
+        if not resolved_domain:
+            return json.dumps({"error": "No domain: pass domain= explicitly or activate a workspace"})
         pool = await get_pool()
         src = uuid.UUID(source_id)
         tgt = uuid.UUID(target_id)
 
         check = await pool.fetch(
             "SELECT id FROM entities WHERE id = ANY($1) AND domain = $2",
-            [src, tgt], domain,
+            [src, tgt], resolved_domain,
         )
         found_ids = {row["id"] for row in check}
         if src not in found_ids:
-            return json.dumps({"error": f"Source entity {source_id} not found in domain {domain}"})
+            return json.dumps({"error": f"Source entity {source_id} not found in domain {resolved_domain}"})
         if tgt not in found_ids:
-            return json.dumps({"error": f"Target entity {target_id} not found in domain {domain}"})
+            return json.dumps({"error": f"Target entity {target_id} not found in domain {resolved_domain}"})
 
         props = json.loads(properties)
         row = await pool.fetchrow(
@@ -48,21 +60,30 @@ def register(mcp: FastMCP):
             RETURNING id, domain, source_id, target_id, relationship_type,
                       properties, created_at, updated_at
             """,
-            domain, src, tgt, relationship_type, json.dumps(props),
+            resolved_domain, src, tgt, relationship_type, json.dumps(props),
         )
         return json.dumps(_rel_to_dict(row), default=str)
 
     @mcp.tool()
-    async def store_remove_relationship(domain: str, relationship_id: str) -> str:
+    async def store_remove_relationship(
+        ctx: Context,
+        relationship_id: str,
+        domain: str = "",
+        workspace: str = "",
+    ) -> str:
         """Remove a relationship by ID.
 
         Args:
-            domain: Domain scope
-            relationship_id: UUID of the relationship"""
+            relationship_id: UUID of the relationship
+            domain: Domain scope (empty → workspace default)
+            workspace: Override active workspace for scope resolution"""
+        resolved_domain = await resolve_domain(ctx, domain, workspace_override=workspace or None)
+        if not resolved_domain:
+            return json.dumps({"error": "No domain: pass domain= explicitly or activate a workspace"})
         pool = await get_pool()
         row = await pool.fetchrow(
             "DELETE FROM relationships WHERE id = $1 AND domain = $2 RETURNING id",
-            uuid.UUID(relationship_id), domain,
+            uuid.UUID(relationship_id), resolved_domain,
         )
         if not row:
             return json.dumps({"error": "Relationship not found"})
@@ -70,25 +91,31 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def store_get_related(
-        domain: str,
+        ctx: Context,
         entity_id: str,
         relationship_type: str | None = None,
         direction: str = "both",
+        domain: str = "",
+        workspace: str = "",
     ) -> str:
         """Get entities related to a given entity.
 
         Args:
-            domain: Domain scope
             entity_id: UUID of the entity
             relationship_type: Filter by relationship type (optional)
-            direction: "outgoing", "incoming", or "both" (default "both")"""
+            direction: "outgoing", "incoming", or "both" (default "both")
+            domain: Domain scope (empty → workspace default)
+            workspace: Override active workspace for scope resolution"""
+        resolved_domain = await resolve_domain(ctx, domain, workspace_override=workspace or None)
+        if not resolved_domain:
+            return json.dumps({"error": "No domain: pass domain= explicitly or activate a workspace"})
         pool = await get_pool()
         eid = uuid.UUID(entity_id)
         results = []
 
         if direction in ("outgoing", "both"):
             conditions = ["r.domain = $1", "r.source_id = $2"]
-            params: list = [domain, eid]
+            params: list = [resolved_domain, eid]
             idx = 3
             if relationship_type is not None:
                 conditions.append(f"r.relationship_type = ${idx}"); params.append(relationship_type)
@@ -109,7 +136,7 @@ def register(mcp: FastMCP):
 
         if direction in ("incoming", "both"):
             conditions = ["r.domain = $1", "r.target_id = $2"]
-            params = [domain, eid]
+            params = [resolved_domain, eid]
             idx = 3
             if relationship_type is not None:
                 conditions.append(f"r.relationship_type = ${idx}"); params.append(relationship_type)

@@ -256,7 +256,8 @@ def register(mcp: FastMCP):
         else:
             lines.append(
                 "💡 No specific domain detected. "
-                "Mention a topic or use `fs_read` on a domain file."
+                "Mention a topic or use `fs_read` on a domain file. "
+                "Call `workspace_activate` to set the active workspace explicitly."
             )
 
         # ── Global instructions ───────────────────────────────────
@@ -271,6 +272,136 @@ def register(mcp: FastMCP):
                     lines.append(content)
             except Exception:
                 pass
+
+        return "\n".join(lines)
+
+    @mcp.tool()
+    async def workspace_activate(ctx: Context, name: str = "") -> str:
+        """Set (or clear) the active workspace for this session.
+
+        Claude is the source of truth for which workspace a conversation
+        is actually in. `session_start`'s trigger-word detection makes a
+        best guess from the first user message, but conversations drift,
+        span workspaces, or start with generic messages that don't match
+        any triggers. Call this whenever you notice the conversation has
+        moved — before fs or Store calls that should resolve relative
+        paths and default domains against the new context.
+
+        Args:
+          name: Workspace to activate (e.g. "burrillville", "somnia").
+                Pass "" or "_clear" to unset the active workspace.
+
+        Returns a confirmation plus a summary of the workspace's bindings
+        and scope, so you can verify the switch did what you expected.
+        """
+        if not name or name == "_clear":
+            await set_active_workspace(ctx, None)
+            return "🎯 Active workspace cleared. No implicit scope or binding resolution."
+
+        # Validate the workspace exists
+        target = WORKSPACES_DIR / name
+        if not target.exists() or not target.is_dir():
+            available = sorted(
+                p.name for p in WORKSPACES_DIR.iterdir()
+                if p.is_dir() and not p.name.startswith("_")
+            )
+            return (
+                f"❌ No workspace named '{name}'.\n"
+                f"Available: {', '.join(available)}"
+            )
+
+        await set_active_workspace(ctx, name)
+
+        # Show what just happened — bindings + scope summary
+        from core.bindings import describe_bindings
+        from core.scope import describe_scope
+
+        bindings = await describe_bindings(ctx)
+        scope = await describe_scope(ctx)
+
+        lines = [f"🎯 Active workspace: **{name}**", ""]
+
+        identity = bindings.get("identity", {})
+        if bindings.get("has_bindings_file") and identity:
+            lines.append("**Identity bindings:**")
+            for rtype, binding in sorted(identity.items()):
+                primary = binding.get("primary", "?")
+                fallbacks = binding.get("fallbacks", [])
+                extra = f" (fallbacks: {', '.join(fallbacks)})" if fallbacks else ""
+                lines.append(f"  • {rtype}: {primary}{extra}")
+        else:
+            lines.append(
+                "**Identity bindings:** none declared (explicit account= required for identity-bound tools)"
+            )
+
+        fs = scope.get("filesystem") or {}
+        ds = scope.get("datastore") or {}
+        lines.append("")
+        lines.append(f"**Filesystem scope** ({fs.get('source', '?')}):")
+        for root in fs.get("writable_roots", []):
+            lines.append(f"  • writable: {root}")
+        for root in fs.get("readable_roots", []):
+            if root not in fs.get("writable_roots", []):
+                lines.append(f"  • readable: {root}")
+        lines.append("")
+        lines.append(f"**Datastore scope** ({ds.get('source', '?')}):")
+        lines.append(f"  • default domain: {ds.get('default_domain', '?')}")
+        if ds.get("allowed_domains", []) != [ds.get("default_domain")]:
+            lines.append(f"  • allowed: {', '.join(ds.get('allowed_domains', []))}")
+
+        return "\n".join(lines)
+
+    @mcp.tool()
+    async def workspace_show(ctx: Context) -> str:
+        """Show the currently active workspace and its bindings/scope.
+
+        Useful when you're about to do something that depends on workspace
+        context (file writes, Store operations) and want to confirm what
+        the resolver will see.
+        """
+        from core.bindings import get_active_workspace, describe_bindings
+        from core.scope import describe_scope
+
+        ws = await get_active_workspace(ctx)
+        if not ws:
+            return (
+                "🎯 No active workspace. Scope is advisory-only and bindings "
+                "resolution will fail with MissingBindingError unless you pass "
+                "account= / workspace= explicitly.\n"
+                "\n"
+                "Call `workspace_activate(name)` to set one."
+            )
+
+        bindings = await describe_bindings(ctx)
+        scope = await describe_scope(ctx)
+
+        lines = [f"🎯 Active workspace: **{ws}**", ""]
+
+        identity = bindings.get("identity", {})
+        lines.append("**Identity bindings:**")
+        if identity:
+            for rtype, binding in sorted(identity.items()):
+                primary = binding.get("primary", "?")
+                fallbacks = binding.get("fallbacks", [])
+                extra = f" (fallbacks: {', '.join(fallbacks)})" if fallbacks else ""
+                lines.append(f"  • {rtype}: {primary}{extra}")
+        else:
+            lines.append("  (none)")
+
+        fs = scope.get("filesystem") or {}
+        ds = scope.get("datastore") or {}
+        lines.append("")
+        lines.append(f"**Filesystem scope** ({fs.get('source', '?')}):")
+        for root in fs.get("writable_roots", []):
+            lines.append(f"  • writable: {root}")
+        for root in fs.get("readable_roots", []):
+            if root not in fs.get("writable_roots", []):
+                lines.append(f"  • readable: {root}")
+        lines.append("")
+        lines.append(f"**Datastore scope** ({ds.get('source', '?')}):")
+        lines.append(f"  • default domain: {ds.get('default_domain', '?')}")
+        if ds.get("allowed_domains", []) != [ds.get("default_domain")]:
+            lines.append(f"  • allowed: {', '.join(ds.get('allowed_domains', []))}")
 
         return "\n".join(lines)
 

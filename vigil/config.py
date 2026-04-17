@@ -35,5 +35,14 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     "postgresql://somnia:changeme@somnia-postgres:5432/somnia",
 )
+# Scope enforcement mode (Phase 2 workspace bindings)
+#   advisory  — scope violations log a warning but tool proceeds (default)
+#   enforce   — scope violations raise and tool fails
+# Flip to "enforce" once advisory has been observed to fire only on genuine
+# violations (not false positives from cross-workspace work). Env override:
+# SCOPE_MODE=enforce or SCOPE_MODE=advisory
+SCOPE_MODE = os.environ.get("SCOPE_MODE", "advisory")
+
+# Database pool sizing
 POOL_MIN_SIZE = int(os.environ.get("POOL_MIN_SIZE", "2"))
 POOL_MAX_SIZE = int(os.environ.get("POOL_MAX_SIZE", "10"))
