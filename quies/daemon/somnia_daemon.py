@@ -195,8 +195,12 @@ def get_claude_auth():
 
 def get_api_key():
     """Return the raw Anthropic API key regardless of OAuth preference.
-    Used by components that must call the Anthropic API directly
-    (e.g. conversation_harvester) rather than via Claude Code OAuth.
+
+    Used by dream-cycle paths that fall back to direct API auth when
+    Claude Code OAuth isn't available (solo_work recovery, consolidation
+    loop). The conversation harvester that originally motivated this
+    helper has been removed — harvesting is now done in-session by
+    Claude using recent_chats/conversation_search, not via the daemon.
     """
     key = os.environ.get("ANTHROPIC_API_KEY")
     if key:
@@ -2837,8 +2841,6 @@ def index():
             "PATCH /nodes/<id>": "Update node",
                                                 "POST /edges": "Create edge",
             "POST /consolidate": "Trigger dream",
-            "POST /harvest/reset": "Reset harvest cooldown and processed UUID list",
-            "POST /harvest/run": "Trigger harvest immediately (bypasses cooldown)",
             "POST /inbox": "Add to STM",
             "GET /inbox": "List STM",
             "GET /dreams": "List dreams",
@@ -3795,243 +3797,6 @@ def debug_cli_test():
     results['test_mode'] = test_mode
 
     return jsonify(results)
-
-
-
-@app.route("/harvest/reset", methods=["POST"])
-def harvest_reset():
-    """Reset harvest state — clears processed_uuids and last_harvest_at.
-    Allows the next scheduler cycle to re-scan all conversations.
-    Optionally POST JSON: {"clear_uuids": false} to only reset the cooldown.
-    """
-    try:
-        from conversation_harvester import load_harvest_state, save_harvest_state
-        body = request.get_json(silent=True) or {}
-        clear_uuids = body.get("clear_uuids", True)
-
-        state = load_harvest_state()
-        cleared = []
-
-        state["last_harvest_at"] = None
-        cleared.append("cooldown (last_harvest_at)")
-
-        if clear_uuids:
-            count = len(state.get("processed_uuids", []))
-            state["processed_uuids"] = []
-            cleared.append(f"processed_uuids ({count} entries)")
-
-        state["last_error"] = None
-        save_harvest_state(state)
-
-        return jsonify({"status": "ok", "cleared": cleared})
-    except Exception as e:
-        app.logger.error(f"harvest_reset: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/harvest/run", methods=["POST"])
-def harvest_run():
-    """Trigger a harvest immediately.
-    POST body (JSON, all optional):
-      force — if True, bypass cooldown (default: True since this is an explicit trigger)
-      limit — max conversations to mine (default: 10)
-    Runs synchronously. Returns harvest result dict.
-    """
-    try:
-        from conversation_harvester import run_harvest, load_harvest_state
-        body = request.get_json(silent=True) or {}
-        limit = int(body.get("limit", 10))
-        force = bool(body.get("force", True))
-
-        # Check cooldown unless force=True
-        if not force:
-            state = load_harvest_state()
-            last = state.get("last_harvest_at")
-            if last:
-                import dateutil.parser as _dp
-                elapsed = (datetime.now(_tz.utc) - _dp.parse(last)).total_seconds()
-                cooldown = 20 * 3600  # 20h default
-                if elapsed < cooldown:
-                    remaining_h = (cooldown - elapsed) / 3600
-                    return jsonify({
-                        "skipped": True,
-                        "reason": f"cooldown active — {remaining_h:.1f}h remaining",
-                    })
-
-        api_key = get_api_key()
-        if not api_key:
-            return jsonify({"error": "No API key available — check 1Password"}), 503
-        result = run_harvest(api_key, limit=limit)
-        return jsonify(result)
-    except Exception as e:
-        app.logger.error(f"harvest_run: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/backfill/export", methods=["POST"])
-def backfill_export():
-    """Mine conversations from a Claude.ai export zip.
-
-    POST body (JSON, all optional):
-      zip_path   — path to export zip (default: /data/workspaces/claude/findings/*.zip)
-      limit      — max conversations to mine per call (default: 30)
-      max_cost   — USD spending cap (default: 1.50)
-      skip_before — ISO date string, skip convs before this (default: 2024-01-01)
-      dry_run    — if true, skip API calls and just count candidates
-
-    Runs synchronously. Call repeatedly to work through the full backlog.
-    Returns: {mined, observations, cost_usd, remaining, status}
-    """
-    import zipfile, glob, re as _re
-    from conversation_harvester import mine_conversation, add_to_inbox
-    from conversation_harvester import load_harvest_state, save_harvest_state
-
-    def extract_export_text(conv, max_messages=80):
-        """Extract text from Claude.ai export format.
-        Export stores text nested in content[].text blocks, not a flat text field.
-        """
-        msgs = conv.get("chat_messages", [])
-        name = conv.get("name", "Untitled") or "Untitled"
-        created = conv.get("created_at", "")[:10]
-        lines = [f"# Conversation: {name} ({created})\n"]
-        msgs = sorted(msgs, key=lambda m: m.get("created_at", ""))[:max_messages]
-        for msg in msgs:
-            sender = msg.get("sender", "unknown")
-            prefix = "Human" if sender == "human" else "Claude"
-            text = msg.get("text", "") or ""
-            if not (isinstance(text, str) and text.strip()):
-                content = msg.get("content", []) or []
-                if isinstance(content, list):
-                    parts = [b.get("text","") for b in content if isinstance(b,dict) and b.get("type")=="text" and b.get("text","").strip()]
-                    text = "\n".join(parts)
-                elif isinstance(content, str):
-                    text = content
-            if sender == "assistant":
-                text = _re.sub(r'```\n.*?```', '[tool call]', text, flags=_re.DOTALL)
-                text = _re.sub(r'(\[tool call\]\s*)+', '[tool calls] ', text)
-            if text.strip():
-                lines.append(f"**{prefix}:** {text.strip()}\n")
-        return "\n".join(lines)
-
-    body = request.get_json(silent=True) or {}
-    limit = int(body.get('limit', 30))
-    max_cost = float(body.get('max_cost', 1.50))
-    skip_before_str = body.get('skip_before', '2024-01-01')
-    dry_run = bool(body.get('dry_run', False))
-
-    # Find zip
-    zip_path = body.get('zip_path')
-    if not zip_path:
-        zips = glob.glob('/data/workspaces/claude/findings/*.zip')
-        if not zips:
-            return jsonify({"error": "No export zip found in /data/workspaces/claude/findings/"}), 404
-        zip_path = sorted(zips)[-1]  # most recent
-
-    # Load conversations
-    try:
-        with zipfile.ZipFile(zip_path) as z:
-            with z.open('conversations.json') as f:
-                convs = json.load(f)
-    except Exception as e:
-        return jsonify({"error": f"Failed to read zip: {e}"}), 500
-
-    # Load processed UUIDs from harvest state
-    state = load_harvest_state()
-    processed = set(state.get('processed_uuids', []))
-
-    # Filter candidates
-    from datetime import timezone
-    try:
-        skip_before = datetime.fromisoformat(skip_before_str).replace(tzinfo=timezone.utc)
-    except Exception:
-        skip_before = datetime(2024, 1, 1, tzinfo=timezone.utc)
-
-    candidates = []
-    for c in convs:
-        uuid = c.get('uuid', '')
-        if uuid in processed:
-            continue
-        created = c.get('created_at', '')
-        if created:
-            try:
-                dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
-                if dt < skip_before:
-                    processed.add(uuid)  # mark old ones as skipped
-                    continue
-            except Exception:
-                pass
-        msgs = c.get('chat_messages', [])
-        if len(msgs) < 2:
-            processed.add(uuid)
-            continue
-        candidates.append(c)
-
-    candidates.sort(key=lambda c: c.get('created_at', ''))
-    remaining_before = len(candidates)
-
-    if dry_run:
-        return jsonify({
-            "status": "dry_run",
-            "candidates": remaining_before,
-            "zip": zip_path,
-            "already_processed": len(state.get('processed_uuids', [])),
-        })
-
-    # Get API key
-    api_key = get_api_key()
-    if not api_key:
-        return jsonify({"error": "No API key — check 1Password"}), 503
-
-    total_obs = 0
-    total_cost = 0.0
-    mined = 0
-    errors = 0
-
-    for c in candidates[:limit]:
-        uuid = c.get('uuid', '')
-        name = c.get('name', 'Untitled') or 'Untitled'
-
-        conv_text = extract_export_text(c)
-        if not conv_text.strip() or len(conv_text) < 150:
-            app.logger.info(f"backfill skip (short {len(conv_text)} chars): '{name[:40]}'")
-            processed.add(uuid)
-            continue
-
-        try:
-            observations = mine_conversation(conv_text, api_key)
-        except Exception as e:
-            app.logger.error(f"backfill mine error '{name[:40]}': {e}")
-            errors += 1
-            continue
-
-        cost = 0.0  # harvester mine_conversation doesn't return cost separately
-        total_cost += cost
-
-        if observations:
-            count = add_to_inbox(observations, name, uuid)
-            total_obs += count
-
-        processed.add(uuid)
-        mined += 1
-
-        if total_cost >= max_cost:
-            app.logger.info(f"backfill: cost cap ${max_cost} reached")
-            break
-
-    # Save updated state
-    state['processed_uuids'] = list(processed)
-    save_harvest_state(state)
-
-    remaining_after = remaining_before - mined
-    return jsonify({
-        "status": "ok",
-        "mined": mined,
-        "observations": total_obs,
-        "cost_usd": round(total_cost, 4),
-        "errors": errors,
-        "remaining": max(0, remaining_after),
-        "zip": zip_path,
-    })
 
 
 @app.route("/search", methods=["GET"])
