@@ -3531,7 +3531,7 @@ def _render_analytics_html(markdown_report, days):
   <a href="/portal" class="topbar-logo">✦ somnia</a>
   <nav class="topbar-nav">
     <a href="/portal" class="topbar-link">Portal</a>
-    <a href="/dashboard" class="topbar-link">Dashboard</a>
+    <a href="/dashboard" class="topbar-link active">Dashboard</a>
   </nav>
 </div>
 <div class="sub-nav">
