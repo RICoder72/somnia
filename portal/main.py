@@ -920,7 +920,7 @@ async def view_file(domain: str, path: str = Query(...)):
     return Response(
         content=target.read_bytes(),
         media_type=mime or "application/octet-stream",
-        headers={{"Content-Disposition": f'inline; filename="{target.name}"'}}
+        headers={"Content-Disposition": f'inline; filename="{target.name}"'}
     )
 
 
