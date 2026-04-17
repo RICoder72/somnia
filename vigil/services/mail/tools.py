@@ -2,8 +2,13 @@
 
 import json
 import logging
+
+from fastmcp import Context
+
 from .manager import MailManager
 from .adapters.gmail import GmailAdapter
+
+from core.binding_helpers import resolve_or_error
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +29,16 @@ def register(mcp) -> None:
 
     @mcp.tool()
     async def mail_list_messages(
-        account: str,
+        ctx: Context,
+        account: str = "",
         folder: str = "INBOX",
         limit: int = 20,
         unread_only: bool = False
     ) -> str:
-        """List messages in a folder."""
+        """List messages in a folder. Uses the active workspace's email binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "email")
+        if err:
+            return err
         page = await mail_manager.list_messages(account, folder, limit, unread_only=unread_only)
         if not page.messages:
             return f"No messages in {folder}"
@@ -44,8 +53,11 @@ def register(mcp) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
-    async def mail_get_message(account: str, message_id: str) -> str:
-        """Get full message with body."""
+    async def mail_get_message(ctx: Context, message_id: str, account: str = "") -> str:
+        """Get full message with body. Uses the active workspace's email binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "email")
+        if err:
+            return err
         msg = await mail_manager.get_message(account, message_id)
         if not msg:
             return f"Message not found: {message_id}"
@@ -65,8 +77,11 @@ def register(mcp) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
-    async def mail_search(account: str, query: str, limit: int = 20) -> str:
-        """Search messages."""
+    async def mail_search(ctx: Context, query: str, account: str = "", limit: int = 20) -> str:
+        """Search messages. Uses the active workspace's email binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "email")
+        if err:
+            return err
         page = await mail_manager.search(account, query, limit=limit)
         if not page.messages:
             return f"No messages matching: {query}"
@@ -79,26 +94,36 @@ def register(mcp) -> None:
 
     @mcp.tool()
     async def mail_send(
-        account: str,
+        ctx: Context,
         to: str,
         subject: str,
         body: str,
+        account: str = "",
         cc: str = "",
         html: bool = False
     ) -> str:
-        """Send an email."""
+        """Send an email. Uses the active workspace's email binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "email")
+        if err:
+            return err
         to_list = [t.strip() for t in to.split(",") if t.strip()]
         cc_list = [c.strip() for c in cc.split(",") if c.strip()] if cc else None
         return await mail_manager.send(account, to_list, subject, body, cc=cc_list, html=html)
 
     @mcp.tool()
-    async def mail_delete(account: str, message_id: str, permanent: bool = False) -> str:
-        """Delete a message (moves to trash by default)."""
+    async def mail_delete(ctx: Context, message_id: str, account: str = "", permanent: bool = False) -> str:
+        """Delete a message (moves to trash by default). Uses the active workspace's email binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "email")
+        if err:
+            return err
         return await mail_manager.delete(account, message_id, permanent)
 
     @mcp.tool()
-    async def mail_mark_read(account: str, message_id: str, read: bool = True) -> str:
-        """Mark message as read or unread."""
+    async def mail_mark_read(ctx: Context, message_id: str, account: str = "", read: bool = True) -> str:
+        """Mark message as read or unread. Uses the active workspace's email binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "email")
+        if err:
+            return err
         return await mail_manager.mark_read(account, message_id, read)
 
     logger.info("✅ Registered 6 mail tools")

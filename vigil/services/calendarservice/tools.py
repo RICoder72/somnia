@@ -2,8 +2,13 @@
 
 import json
 import logging
+
+from fastmcp import Context
+
 from .manager import CalendarManager
 from .adapters.gcal import GCalAdapter
+
+from core.binding_helpers import resolve_or_error
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +28,11 @@ def register(mcp) -> None:
         return
 
     @mcp.tool()
-    async def calendar_list_calendars(account: str) -> str:
-        """List available calendars."""
+    async def calendar_list_calendars(ctx: Context, account: str = "") -> str:
+        """List available calendars. Uses the active workspace's calendar binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "calendar")
+        if err:
+            return err
         calendars = await calendar_manager.list_calendars(account)
         if not calendars:
             return f"No calendars found or could not connect to {account}"
@@ -37,12 +45,16 @@ def register(mcp) -> None:
 
     @mcp.tool()
     async def calendar_list_events(
-        account: str,
+        ctx: Context,
+        account: str = "",
         calendar_id: str = "primary",
         days: int = 7,
         limit: int = 50
     ) -> str:
-        """List upcoming events."""
+        """List upcoming events. Uses the active workspace's calendar binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "calendar")
+        if err:
+            return err
         from datetime import datetime, timedelta, timezone
         start = datetime.now(timezone.utc)
         end = start + timedelta(days=days)
@@ -59,8 +71,11 @@ def register(mcp) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
-    async def calendar_get_event(account: str, calendar_id: str, event_id: str) -> str:
-        """Get full event details."""
+    async def calendar_get_event(ctx: Context, calendar_id: str, event_id: str, account: str = "") -> str:
+        """Get full event details. Uses the active workspace's calendar binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "calendar")
+        if err:
+            return err
         event = await calendar_manager.get_event(account, calendar_id, event_id)
         if not event:
             return f"Event not found: {event_id}"
@@ -85,10 +100,11 @@ def register(mcp) -> None:
 
     @mcp.tool()
     async def calendar_create_event(
-        account: str,
+        ctx: Context,
         title: str,
         start: str,
         end: str,
+        account: str = "",
         calendar_id: str = "primary",
         description: str = "",
         location: str = "",
@@ -96,7 +112,10 @@ def register(mcp) -> None:
         all_day: bool = False,
         conference: bool = False
     ) -> str:
-        """Create a new event. Dates should be ISO format (YYYY-MM-DDTHH:MM:SS)."""
+        """Create a new event. Dates should be ISO format (YYYY-MM-DDTHH:MM:SS). Uses the active workspace's calendar binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "calendar")
+        if err:
+            return err
         from datetime import datetime
         try:
             start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
@@ -116,8 +135,11 @@ def register(mcp) -> None:
         )
 
     @mcp.tool()
-    async def calendar_delete_event(account: str, calendar_id: str, event_id: str) -> str:
-        """Delete an event."""
+    async def calendar_delete_event(ctx: Context, calendar_id: str, event_id: str, account: str = "") -> str:
+        """Delete an event. Uses the active workspace's calendar binding if account is omitted."""
+        account, err = await resolve_or_error(ctx, account, "calendar")
+        if err:
+            return err
         return await calendar_manager.delete_event(account, calendar_id, event_id)
 
     logger.info("✅ Registered 5 calendar tools")

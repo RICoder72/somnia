@@ -16,6 +16,8 @@ dependencies = [
     "supernotelib>=0.5.0",
     "PyMuPDF>=1.23.0",
     "reportlab>=4.0.0",
+    # Workspace bindings (bindings.yaml / hooks.yaml)
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
