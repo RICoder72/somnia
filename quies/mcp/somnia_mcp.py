@@ -420,7 +420,8 @@ def somnia_pin(
     id: str,
     content: str = "",
     properties: str = "{}",
-    unpin: bool = False
+    unpin: bool = False,
+    foundational: bool = False
 ) -> str:
     """
     Pin or unpin a node. Creates the node if it doesn't exist.
@@ -428,6 +429,13 @@ def somnia_pin(
     Pinned nodes are sovereign — the dream cycle can observe them and
     add edges but cannot merge, dissolve, or delete them. Use for
     projects, people, recurring topics, or anything worth not losing.
+
+    Set foundational=True to additionally flag the node as foundational,
+    which gives it a hard decay floor (default 0.35) on top of whatever
+    type/connectivity/pinned floors already apply. Reserve for nodes
+    that express identity, core philosophy, or architectural bedrock —
+    not active projects or transient interests. Setting is one-way via
+    this tool; clearing requires a direct update.
 
     Properties are merged on update (existing keys preserved unless
     overwritten). After pinning a new node you intend to work on, call
@@ -438,6 +446,7 @@ def somnia_pin(
         content: Description of what this node represents
         properties: JSON string of properties to set/merge
         unpin: Set True to unpin (node stays in graph, loses durability)
+        foundational: Set True to flag as foundational (hard decay floor)
     """
     if unpin:
         result = _api_post(f"/nodes/{id}/unpin")
@@ -456,9 +465,13 @@ def somnia_pin(
         data["content"] = content
     if props:
         data["properties"] = props
+    if foundational:
+        data["foundational"] = True
 
     result = _api_post(f"/nodes/{id}/pin", data)
-    _record_activity("pin", {"id": id, "action": "pin", "created": result.get("created", False)})
+    _record_activity("pin", {"id": id, "action": "pin",
+                             "created": result.get("created", False),
+                             "foundational": foundational})
 
     if "error" in result:
         return f"Failed to pin: {result['error']}"
