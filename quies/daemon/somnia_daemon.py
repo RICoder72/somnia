@@ -3062,6 +3062,7 @@ def pin_node(node_id):
     data = request.get_json() or {}
     content = data.get("content", "")
     properties = data.get("properties", {})
+    foundational = bool(data.get("foundational", False))
 
     row = execute("SELECT id, metadata FROM nodes WHERE id = %s", (node_id,), fetch='one')
 
@@ -3080,19 +3081,24 @@ def pin_node(node_id):
         if content:
             updates.append("content = %s")
             params.append(content)
+        if foundational:
+            updates.append("foundational = TRUE")
         params.append(node_id)
         execute(f"UPDATE nodes SET {', '.join(updates)} WHERE id = %s", tuple(params))
-        return jsonify({"id": node_id, "status": "pinned", "created": False})
+        return jsonify({"id": node_id, "status": "pinned", "created": False,
+                        "foundational": foundational})
     else:
         # New node — create and pin
         if not content:
             return jsonify({"error": "content required when pinning a new node"}), 400
         execute("""
-            INSERT INTO nodes (id, type, content, metadata, pinned, last_accessed, epistemic_status)
-            VALUES (%s, %s, %s, %s, TRUE, NOW(), 'established')
+            INSERT INTO nodes (id, type, content, metadata, pinned, foundational, last_accessed, epistemic_status)
+            VALUES (%s, %s, %s, %s, TRUE, %s, NOW(), 'established')
         """, (node_id, data.get("type", "memory"), content,
-              json.dumps(properties) if properties else '{}'))
-        return jsonify({"id": node_id, "status": "pinned", "created": True})
+              json.dumps(properties) if properties else '{}',
+              foundational))
+        return jsonify({"id": node_id, "status": "pinned", "created": True,
+                        "foundational": foundational})
 
 
 @app.route("/nodes/<node_id>/unpin", methods=["POST"])
