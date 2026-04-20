@@ -2060,6 +2060,43 @@ def _build_rumination_prompt(graph_stats):
                         f" [decay={node['decay_state']:.2f}, reinforced={node['reinforcement_count']}x]\n")
         context += "\n"
 
+    # Cold Nodes Worth Attention — structurally-significant LTM nodes that
+    # have faded. Surface high-connectivity cold nodes in a dedicated table
+    # so they are not lost in the full node list. The prompt already tells
+    # Quies how to handle cold nodes; this just stops hiding the important
+    # ones. See GRAPH-HEALTH-DESIGN.md § Mechanism 2.
+    cold_attention = execute(
+        "SELECT n.id, n.type, n.content, n.decay_state, n.last_accessed, "
+        "       COUNT(DISTINCT e.id) AS edge_count "
+        "FROM nodes n "
+        "LEFT JOIN edges e ON e.source_id = n.id OR e.target_id = n.id "
+        "WHERE n.memory_layer = 'ltm' AND n.pinned = FALSE "
+        "  AND n.decay_state < 0.25 "
+        "GROUP BY n.id, n.type, n.content, n.decay_state, n.last_accessed "
+        "ORDER BY COUNT(DISTINCT e.id) DESC, n.decay_state ASC "
+        "LIMIT 8",
+        fetch='all') or []
+
+    if cold_attention:
+        context += "## Cold Nodes Worth Attention\n\n"
+        context += ("These LTM nodes have significant structural connections but "
+                    "have faded. They are not urgent — but if any connect "
+                    "meaningfully to what you are already thinking about, consider "
+                    "rescuing them. An edge to a warm node is enough.\n\n")
+        context += "| Node | Type | Edges | Decay | Last Active |\n"
+        context += "|------|------|-------|-------|-------------|\n"
+        for n in cold_attention:
+            last = n.get('last_accessed')
+            if isinstance(last, datetime):
+                last = last.strftime('%Y-%m-%d')
+            elif last:
+                last = str(last)[:10]
+            else:
+                last = 'never'
+            context += (f"| `{n['id']}` | {n['type']} | {n['edge_count']} | "
+                        f"{n['decay_state']:.2f} | {last} |\n")
+        context += "\n"
+
     # Show all unpinned nodes with heat map indicator
     context += "## All Nodes (sorted coldest → warmest)\n\n"
     for node in unpinned_nodes:
@@ -2319,12 +2356,39 @@ def _build_archaeology_prompt(graph_stats):
     except FileNotFoundError:
         system_prompt = "Review SLTM nodes. Identify what deserves resurfacing. Output JSON."
 
+    # Connectivity-ranked SLTM sampling: the highest-edge-count SLTM nodes
+    # are most likely still structurally significant and worth triaging first.
+    # Among equal-connectivity nodes, sample the less-inert ones (higher decay)
+    # first — closer to resurrection than deep-cold fossils.
+    # See GRAPH-HEALTH-DESIGN.md § Mechanism 3.
     sltm_nodes = execute(
-        "SELECT id, type, content, decay_state, reinforcement_count, created_at, last_accessed "
-        "FROM nodes "
-        "WHERE memory_layer = 'sltm' AND pinned = FALSE "
-        "ORDER BY COALESCE(last_accessed, created_at) ASC, decay_state ASC "
+        "SELECT n.id, n.type, n.content, n.decay_state, n.reinforcement_count, "
+        "       n.created_at, n.last_accessed, "
+        "       COUNT(DISTINCT e.id) AS edge_count "
+        "FROM nodes n "
+        "LEFT JOIN edges e ON e.source_id = n.id OR e.target_id = n.id "
+        "WHERE n.memory_layer = 'sltm' AND n.pinned = FALSE "
+        "GROUP BY n.id, n.type, n.content, n.decay_state, n.reinforcement_count, "
+        "         n.created_at, n.last_accessed "
+        "ORDER BY COUNT(DISTINCT e.id) DESC, n.decay_state DESC "
         "LIMIT 25",
+        fetch='all') or []
+
+    # Pre-SLTM watch list: LTM nodes approaching the SLTM threshold that
+    # archaeology can catch before they cross. High edge count + low decay
+    # suggests structural value the passive system is about to lose.
+    # GRAPH-HEALTH-DESIGN.md § Mechanism 3, pre-SLTM section.
+    pre_sltm = execute(
+        "SELECT n.id, n.type, n.content, n.decay_state, n.last_accessed, "
+        "       COUNT(DISTINCT e.id) AS edge_count "
+        "FROM nodes n "
+        "LEFT JOIN edges e ON e.source_id = n.id OR e.target_id = n.id "
+        "WHERE n.memory_layer = 'ltm' AND n.pinned = FALSE "
+        "  AND n.decay_state < 0.15 "
+        "GROUP BY n.id, n.type, n.content, n.decay_state, n.last_accessed "
+        "HAVING COUNT(DISTINCT e.id) > 5 "
+        "ORDER BY COUNT(DISTINCT e.id) DESC, n.decay_state ASC "
+        "LIMIT 15",
         fetch='all') or []
 
     sltm_count_total = graph_stats.get('sltm_count', len(sltm_nodes))
@@ -2333,11 +2397,34 @@ def _build_archaeology_prompt(graph_stats):
 
 **LTM nodes**: {graph_stats['node_count']}
 **SLTM nodes (total)**: {sltm_count_total}
-**Showing**: {len(sltm_nodes)} most inert (oldest / never accessed)
-
-## SLTM Sample
+**Showing**: {len(sltm_nodes)} SLTM sample (ranked by connectivity)
 
 """
+
+    # Pre-SLTM section first — these are still-rescuable nodes. Handle before
+    # spending attention on the deeper SLTM review.
+    if pre_sltm:
+        context += "## Pre-SLTM Watch List\n\n"
+        context += ("These nodes are still in LTM but approaching the SLTM "
+                    "threshold (decay < 0.15). High edge counts suggest they "
+                    "may still be structurally significant. Review now before "
+                    "they fade — a reinforcing connection or a stm_observation "
+                    "can rescue them.\n\n")
+        context += "| Node | Type | Edges | Decay | Last Active |\n"
+        context += "|------|------|-------|-------|-------------|\n"
+        for n in pre_sltm:
+            last = n.get('last_accessed')
+            if isinstance(last, datetime):
+                last = last.strftime('%Y-%m-%d')
+            elif last:
+                last = str(last)[:10]
+            else:
+                last = 'never'
+            context += (f"| `{n['id']}` | {n['type']} | {n['edge_count']} | "
+                        f"{n['decay_state']:.3f} | {last} |\n")
+        context += "\n"
+
+    context += "## SLTM Sample\n\n"
     for node in sltm_nodes:
         created = node.get('created_at', '?')
         if hasattr(created, 'isoformat'):
@@ -2347,7 +2434,9 @@ def _build_archaeology_prompt(graph_stats):
         parts = [
             f"### {node['id']} ({node['type']})",
             f"**Created**: {created} | **Last accessed**: {last_str} | "
-            f"**Decay**: {node['decay_state']:.3f} | **Reinforced**: {node['reinforcement_count']}x",
+            f"**Decay**: {node['decay_state']:.3f} | "
+            f"**Edges**: {node.get('edge_count', 0)} | "
+            f"**Reinforced**: {node['reinforcement_count']}x",
             "",
             node['content'],
             "",
