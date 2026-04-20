@@ -15,6 +15,14 @@ scheduler:
   solo_work_max_duration_minutes: 20  # wall clock limit for solo-work
   archaeology_cooldown_minutes: 720   # 12 hours between archaeology sessions
 
+  # Work-queue cycle budgets (Track A Phase 2 — process_stm and later activities).
+  # cycle_max_tokens is a soft ceiling across all handler iterations in one tick;
+  # cycle_max_seconds is a hard wall-clock cap. Per-handler cost enforcement
+  # (daily cap, per-session cap) still lives in the activity's d_fn and in
+  # run_consolidation itself.
+  cycle_max_tokens: 50000
+  cycle_max_seconds: 1200
+
 # Budget & cost controls
 budget:
   max_cost_per_day: 2.00        # hard cap across all autonomous phases
