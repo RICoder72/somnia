@@ -24,6 +24,13 @@ from flask import Flask, jsonify, request
 import yaml
 
 from db import execute, execute_many, init_db as db_init, get_conn, put_conn
+from work_queue import (
+    register_activity,
+    run_cycle,
+    JobResult,
+    Budget,
+    TIER_PROCESS_STM,
+)
 
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
@@ -2627,6 +2634,123 @@ def _refresh_portal_manifest(dream_id=None):
         return False
 
 
+# ── Work-queue activity handlers (Track A Phase 2) ─────────────────────────
+#
+# process_stm is the first activity migrated from the old if/else cooldown
+# chain to the tier+D work-queue model. Ruminate / solo_work / archaeology
+# remain on the old path in dream_scheduler() until they are migrated in
+# subsequent Track A phases.
+
+def _handler_process_stm(job: dict, budget: Budget) -> JobResult:
+    """
+    Work-queue handler for process_stm. Wraps run_consolidation(mode='process').
+
+    Operation counts, cost, and per-call detail are already logged inside
+    run_consolidation via log_event, so JobResult only needs to carry status
+    plus token usage for budget bookkeeping.
+
+    Returns:
+        complete=True  when the inbox has drained below min_inbox_items.
+        complete=False (paused) when more items remain — the job survives to
+        the next cycle and D will re-select it (or not, if another activity
+        has taken higher priority).
+    """
+    try:
+        result = run_consolidation(mode='process')
+    except Exception as e:
+        logger.exception("process_stm handler raised")
+        return JobResult(complete=False, error=str(e))
+
+    if 'error' in result:
+        return JobResult(complete=False, error=str(result['error']))
+
+    usage = result.get('usage') or {}
+    tokens = int(usage.get('input_tokens', 0)) + int(usage.get('output_tokens', 0))
+
+    # Parity with the old scheduler's summary log line.
+    ops = result.get('operations') or {}
+    logger.info(
+        f"Scheduler[work_queue]: process_stm complete — "
+        f"{len(ops.get('nodes_created') or [])} nodes, "
+        f"{len(ops.get('edges_created') or [])} edges, "
+        f"{tokens} tokens, dream_id={(result.get('dream_id') or '')[:8]}"
+    )
+
+    # Determine whether inbox is drained. If items remain at or above the
+    # min threshold, pause — D will re-select process_stm next cycle.
+    try:
+        row = execute(
+            "SELECT COUNT(*) AS n FROM inbox WHERE processed = FALSE",
+            fetch='one'
+        )
+        remaining = int(row['n']) if row else 0
+    except Exception:
+        remaining = 0
+
+    min_items = CONFIG.get('consolidation', {}).get('min_inbox_items', 1)
+    if remaining >= min_items:
+        return JobResult(
+            complete=False,
+            cursor={'remaining': remaining},
+            tokens_used=tokens,
+        )
+    return JobResult(complete=True, tokens_used=tokens)
+
+
+def _d_process_stm(state: dict) -> float:
+    """
+    D score for process_stm — driven by inbox depth, gated by cost/cooldown.
+
+    Replicates can_dream()'s hard-gate behavior:
+      - inbox below min_inbox_items              → 0
+      - projected daily cost exceeds cap         → 0
+      - global cooldown still active             → 0
+    Otherwise ramps linearly from 0.3 (at min_items) to 1.0 (at ≥60 items,
+    the consolidation batch size).
+    """
+    inbox = int(state.get('inbox_depth', 0))
+    min_items = CONFIG.get('consolidation', {}).get('min_inbox_items', 1)
+    if inbox < min_items:
+        return 0.0
+
+    # Budget gate — same math as can_dream()
+    try:
+        budget_cfg = CONFIG.get('budget', {})
+        daily = get_daily_cost()
+        max_daily = budget_cfg.get('max_cost_per_day', 2.00)
+        max_session = budget_cfg.get('max_cost_dream', 0.30)
+        if daily + max_session > max_daily:
+            return 0.0
+    except Exception:
+        pass
+
+    # Global cooldown gate
+    try:
+        ok, _ = check_global_cooldown()
+        if not ok:
+            return 0.0
+    except Exception:
+        pass
+
+    # Inbox pressure ramp — saturate at the consolidation batch size
+    saturation = 60.0
+    if inbox >= saturation:
+        return 1.0
+    span = max(1.0, saturation - min_items)
+    return 0.3 + (inbox - min_items) / span * 0.7
+
+
+register_activity(
+    type_name='process_stm',
+    handler=_handler_process_stm,
+    tier=TIER_PROCESS_STM,
+    d_fn=_d_process_stm,
+    resumable=True,
+    deduplicate=True,
+    description='Consolidate STM inbox items into LTM graph.',
+)
+
+
 def dream_scheduler():
     """Background thread that periodically checks if it's time to dream."""
     sched = CONFIG.get('scheduler', {})
@@ -2660,27 +2784,42 @@ def dream_scheduler():
                     # to avoid retrying every 15 minutes
                     _last_backup_date = today
 
-            # Phase 1: Processing — highest priority, runs if STM has items
-            can, reason = can_dream()
-            if can:
-                logger.info("Scheduler: inbox ready, starting processing dream")
-                log_event('info', 'scheduler', 'Starting processing dream', {'reason': reason})
-                result = run_consolidation(mode='process')
-                if 'error' in result:
-                    logger.error(f"Scheduler: processing dream failed: {result['error']}")
-                    log_event('error', 'dream', f"Processing dream failed: {result['error']}",
-                              {'dream_id': result.get('dream_id')}, dream_id=result.get('dream_id'))
-                else:
-                    logger.info(
-                        f"Scheduler: processing dream complete — "
-                        f"{result['operations']['nodes_created']} nodes, "
-                        f"{result['operations']['edges_created']} edges")
-                    log_event('info', 'dream', 'Processing dream complete', {
-                        'nodes_created': result['operations']['nodes_created'],
-                        'edges_created': result['operations']['edges_created'],
-                        'duration_seconds': result.get('duration_seconds')
-                    }, dream_id=result.get('dream_id'))
+            # Phase 1: Processing — tier-0 activity, runs via work queue.
+            # If work_queue dispatched any job this tick, skip Phase 2 below
+            # (processing is obligatory and preempts ruminate/solo/archaeology,
+            # matching the old can_dream()-then-else behavior).
+            try:
+                cycle_summary = run_cycle(
+                    budget_tokens=CONFIG.get('scheduler', {}).get(
+                        'cycle_max_tokens', 50_000),
+                    budget_seconds=CONFIG.get('scheduler', {}).get(
+                        'cycle_max_seconds', 1200.0),
+                )
+            except Exception as e:
+                logger.error(f"Scheduler: work queue cycle raised: {e}", exc_info=True)
+                log_event('error', 'scheduler', f'Work queue cycle raised: {e}')
+                cycle_summary = {'jobs_attempted': 0}
+
+            if cycle_summary.get('jobs_attempted', 0) > 0:
+                logger.info(
+                    f"Scheduler: work queue ran — "
+                    f"attempted={cycle_summary.get('jobs_attempted', 0)}, "
+                    f"complete={cycle_summary.get('jobs_completed', 0)}, "
+                    f"paused={cycle_summary.get('jobs_paused', 0)}, "
+                    f"failed={cycle_summary.get('jobs_failed', 0)}, "
+                    f"tokens={cycle_summary.get('total_tokens', 0)}"
+                )
+                log_event('info', 'scheduler', 'Work queue cycle complete', {
+                    'jobs_attempted': cycle_summary.get('jobs_attempted', 0),
+                    'jobs_completed': cycle_summary.get('jobs_completed', 0),
+                    'jobs_paused':    cycle_summary.get('jobs_paused', 0),
+                    'jobs_failed':    cycle_summary.get('jobs_failed', 0),
+                    'total_tokens':   cycle_summary.get('total_tokens', 0),
+                    'elapsed_seconds': cycle_summary.get('elapsed_seconds', 0),
+                })
             else:
+                # No work-queue jobs eligible this tick — fall through to the
+                # old if/else chain for ruminate / solo_work / archaeology.
                 # Phase 2: Choose between rumination and solo-work
                 # Both check their own cooldowns; pick whichever is eligible.
                 # If both eligible, tiebreak: whichever ran least recently goes first.
@@ -2786,7 +2925,8 @@ def dream_scheduler():
                             'summary': result.get('summary', '')[:200]
                         }, dream_id=result.get('dream_id'))
                 else:
-                    logger.debug(f"Scheduler: all phases idle — dreaming={reason}, "
+                    logger.debug(f"Scheduler: all phases idle — "
+                                 f"work_queue={cycle_summary.get('jobs_attempted', 0)} attempted, "
                                  f"ruminating={rum_reason}, solo={solo_reason}, "
                                  f"archaeology={arch_reason})")
 
