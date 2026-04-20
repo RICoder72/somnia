@@ -337,3 +337,84 @@ def read_for_session():
     except Exception as e:
         logger.error(f"sticky_notes: read_for_session failed: {e}")
         return None
+
+
+# ── One-shot migrations / cleanups ─────────────────────────────────────────
+
+def purge_deprecated_harvest_flags():
+    """One-shot cleanup: scrub content left behind by the Claude.ai
+    session-key harvester that was retired in commit 6dc99bc (April 2026).
+
+    The harvester used to call update_state_flags() with nudges like
+    'Refresh Claude AI Session Key in 1Password' and write For-Next-Claude
+    entries about refreshing the session key. With the harvester gone
+    nothing is updating those lines, so they sit in the file forever and
+    show up on every somnia_session dashboard.
+
+    This function scrubs:
+      - State Flags: any '- Last harvest', '- Inbox depth',
+        '- Last harvest summary' lines, plus any '- ⚠️' nudge mentioning
+        'session key' / 'refresh claude' / 'harvester'.
+      - For Next Claude: any entry whose body mentions 'session key',
+        'refresh claude', or 'harvester'.
+
+    Safe to call repeatedly — idempotent on a clean file.
+    Returns a dict summarizing what was removed.
+    """
+    if not NOTES_FILE.exists():
+        return {"removed_state_flags": 0, "removed_fnc_entries": 0,
+                "note": "sticky-notes.md does not exist"}
+
+    def _is_harvest_cruft_flag(line: str) -> bool:
+        lo = line.lower().strip()
+        if line.startswith("- Last harvest"):
+            return True
+        if line.startswith("- Inbox depth"):
+            return True
+        if line.startswith("- Last harvest summary"):
+            return True
+        if line.startswith("- ⚠️") and (
+            "session key" in lo
+            or "refresh claude" in lo
+            or "harvester" in lo
+        ):
+            return True
+        return False
+
+    def _is_harvest_cruft_fnc(entry: str) -> bool:
+        lo = entry.lower()
+        return (
+            "session key" in lo
+            or "refresh claude" in lo
+            or ("harvester" in lo and "retired" not in lo)
+        )
+
+    try:
+        lock = FileLock(str(LOCK_FILE), timeout=10)
+        with lock:
+            sections = _parse_notes()
+
+            sf_before = [l for l in sections["state_flags"].splitlines() if l.strip()]
+            sf_after  = [l for l in sf_before if not _is_harvest_cruft_flag(l)]
+            removed_sf = len(sf_before) - len(sf_after)
+            sections["state_flags"] = "\n".join(sf_after)
+
+            fnc_raw = sections["for_next_claude"].strip()
+            entries = [e.strip() for e in fnc_raw.split("\n\n") if e.strip()]
+            kept    = [e for e in entries if not _is_harvest_cruft_fnc(e)]
+            removed_fnc = len(entries) - len(kept)
+            sections["for_next_claude"] = "\n\n".join(kept)
+
+            NOTES_FILE.write_text(_render_notes(sections))
+
+        logger.info(
+            f"sticky_notes: purged deprecated harvester cruft — "
+            f"state_flags={removed_sf}, for_next_claude={removed_fnc}"
+        )
+        return {
+            "removed_state_flags": removed_sf,
+            "removed_fnc_entries": removed_fnc,
+        }
+    except Exception as e:
+        logger.error(f"sticky_notes: purge_deprecated_harvest_flags failed: {e}")
+        return {"error": str(e)}

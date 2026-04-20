@@ -3942,6 +3942,21 @@ def portal_bundle():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/admin/sticky-notes/purge-harvest-cruft", methods=["POST"])
+def admin_purge_harvest_cruft():
+    """One-shot maintenance endpoint: scrub fossil content from sticky-notes.md
+    left behind by the Claude.ai session-key harvester removed in commit 6dc99bc
+    (April 2026). Idempotent — safe to call repeatedly. See sticky_notes.py
+    purge_deprecated_harvest_flags() for details on what gets removed."""
+    try:
+        from sticky_notes import purge_deprecated_harvest_flags
+    except Exception as e:
+        return jsonify({"error": f"import failed: {e}"}), 500
+    result = purge_deprecated_harvest_flags()
+    status = 500 if 'error' in result else 200
+    return jsonify(result), status
+
+
 @app.route("/debug/cli-test", methods=["POST"])
 def debug_cli_test():
     """Temporary diagnostic: run CLI tests and return raw output."""
