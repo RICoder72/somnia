@@ -410,6 +410,25 @@ def somnia_recall(
                 extras.append(f"reinforced {reinforcement}x, decay {decay:.2f}")
             if extras:
                 lines.append(f"  ({', '.join(extras)})")
+
+        # Surface node properties (stored in metadata JSONB column)
+        raw_meta = node.get("metadata")
+        if raw_meta:
+            try:
+                meta = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            if meta:
+                # Filter out portal/provisioning noise — keep semantic properties
+                skip_keys = {
+                    "provisioned", "portal_visible", "has_collab_space",
+                    "icon", "name", "description", "last_provisioned",
+                    "docs_path", "store_ready", "needs_store",
+                }
+                filtered = {k: v for k, v in meta.items() if k not in skip_keys}
+                if filtered:
+                    lines.append(f"  properties: {json.dumps(filtered, ensure_ascii=False)}")
+
         lines.append("")
 
     return "\n".join(lines)
