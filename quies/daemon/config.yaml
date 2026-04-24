@@ -100,6 +100,13 @@ decay:
     event:          { rate_multiplier: 1.00, floor: 0.00 }  # episodic — can fully fade
     wondering-thread: { rate_multiplier: 0.70, floor: 0.05 }  # semi-durable exploration
 
+
+# Edge lifecycle
+edges:
+  decay_window_days: 90          # edges not reinforced within this window start losing weight
+  decay_factor: 0.95             # weight multiplier per edge_decay pass
+  prune_weight_threshold: 0.10   # flag for review below this weight
+  archive_after_flags: 3         # auto-archive if still flagged after N passes
 # Logging
 logging:
   level: INFO
