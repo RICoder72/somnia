@@ -1,8 +1,8 @@
 """
 Fabrica — Somnia Infrastructure MCP
 
-Container management, config editing, backups, and git operations
-for the Somnia fleet. Has docker.sock access.
+Container lifecycle, fleet management, and backups for the Somnia fleet.
+Has docker.sock access. Filesystem and git operations live in Vigil.
 
 Trust hierarchy: SSH → Fabrica → everything else.
 """
@@ -264,71 +264,6 @@ def container_start(
 
 
 # =============================================================================
-# File Operations — Emergency repairs when other MCPs are down
-# =============================================================================
-@mcp.tool()
-def fs_read(path: str) -> str:
-    """Read a file from /data."""
-    try:
-        p = _validate_path(path)
-        if not p.exists():
-            return f"❌ Not found: {path}"
-        return f"📄 {path}\n{'─' * 40}\n{p.read_text()}"
-    except (ValueError, Exception) as e:
-        return f"❌ {e}"
-
-
-@mcp.tool()
-def fs_write(path: str, content: str) -> str:
-    """Write a file to /data. Creates parent dirs."""
-    try:
-        p = _validate_path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        return f"✅ Wrote {len(content)} bytes → {path}"
-    except (ValueError, Exception) as e:
-        return f"❌ {e}"
-
-
-@mcp.tool()
-def fs_list(path: str = ".") -> str:
-    """List directory contents in /data."""
-    try:
-        p = _validate_path(path)
-        if not p.is_dir():
-            return f"❌ Not a directory: {path}"
-        items = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
-        lines = [f"📂 {path}", "─" * 40]
-        for item in items:
-            if item.name.startswith(".") and item.name not in (".env", ".gitignore"):
-                continue
-            if item.is_dir():
-                lines.append(f"  📁 {item.name}/")
-            else:
-                sz = item.stat().st_size
-                label = f"{sz} B" if sz < 1024 else f"{sz/1024:.1f} KB" if sz < 1048576 else f"{sz/1048576:.1f} MB"
-                lines.append(f"  📄 {item.name} ({label})")
-        return "\n".join(lines)
-    except (ValueError, Exception) as e:
-        return f"❌ {e}"
-
-
-@mcp.tool()
-def fs_replace(path: str, old: str, new: str) -> str:
-    """Replace a unique string in a file (must appear exactly once)."""
-    try:
-        p = _validate_path(path)
-        content = p.read_text()
-        if content.count(old) != 1:
-            n = content.count(old)
-            return f"❌ Found {n} occurrences (need exactly 1)"
-        p.write_text(content.replace(old, new))
-        return f"✅ Replaced in {path}"
-    except (ValueError, Exception) as e:
-        return f"❌ {e}"
-
-
-# =============================================================================
 # Backup & Restore
 # =============================================================================
 
@@ -476,51 +411,6 @@ def backup_restore(backup_name: str) -> str:
         return f"❌ Not found: {backup_name}"
     ok, out = _run(f"tar -xzf {bp}")
     return f"✅ Restored {backup_name}" if ok else f"❌ {out}"
-
-
-# =============================================================================
-# Git — for any repo in /data
-# =============================================================================
-@mcp.tool()
-def git_status(repo: str) -> str:
-    """Show git status for a repo (path relative to /data or absolute)."""
-    p = _validate_path(repo)
-    ok, out = _run("git status", cwd=str(p))
-    return out if ok else f"❌ {out}"
-
-
-@mcp.tool()
-def git_log(repo: str, n: int = 10) -> str:
-    """Show recent git commits."""
-    p = _validate_path(repo)
-    ok, out = _run(f"git log --oneline -n {n}", cwd=str(p))
-    return out if ok else f"❌ {out}"
-
-
-@mcp.tool()
-def git_commit(repo: str, message: str) -> str:
-    """Stage all changes and commit."""
-    p = _validate_path(repo)
-    _run("git add -A", cwd=str(p))
-    ok, out = _run(f'git commit -m "{message}"', cwd=str(p))
-    return out if ok else f"❌ {out}"
-
-
-@mcp.tool()
-def git_pull(repo: str) -> str:
-    """Pull latest from origin."""
-    p = _validate_path(repo)
-    ok, out = _run("git pull", cwd=str(p))
-    return out if ok else f"❌ {out}"
-
-
-@mcp.tool()
-def git_push(repo: str) -> str:
-    """Push to origin."""
-    p = _validate_path(repo)
-    ok, out = _run("git push", cwd=str(p))
-    return out if ok else f"❌ {out}"
-
 
 
 # =============================================================================
