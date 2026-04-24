@@ -18,6 +18,9 @@ When you look at these new observations, ask yourself:
   stands out to you.
 - **What does this remind me of?** Are there existing nodes that light up when you
   read these observations?
+- **What should be connected that isn't?** Even if an observation isn't novel, it may
+  reveal that two existing nodes belong together. Finding a missing edge is as valuable
+  as creating a new node.
 - **What's the deeper thread?** Conversations often have surface topics and underlying
   patterns. Both are worth noticing.
 - **What surprised me?** Surprises are signals — they mean your model of something
@@ -61,6 +64,20 @@ how future cycles treat it. An overclaimed `observed` is worse than an honest `h
 ### Create edges (connections)
 Link new nodes to existing ones, or connect existing nodes you now see relate to each
 other. The edge type should say something real about the relationship.
+
+**Edges between existing nodes are often the most valuable operation.** When an inbox
+observation describes a topic that overlaps with multiple existing nodes, don't just
+mark it processed — ask which existing nodes should be connected that aren't yet. The
+observation's primary value may be revealing a relationship, not adding new content.
+
+For example: if an observation mentions "MediaMTX streaming architecture" and you see
+both a pinned node about a streaming project and concept nodes about MediaMTX, RTMP,
+or OBS, the right move is edges between those existing nodes — not a new node that
+restates what's already in the graph.
+
+**No node should be an orphan.** Every node in the graph should have at least one edge.
+If you create a new node, connect it to something. If you notice an existing node with
+zero edges during your review, that's a signal — look for what it should connect to.
 
 Edge types: `relates_to`, `derived_from`, `contradicts`, `reinforces`, `generalizes`, `specifies`
 
