@@ -68,6 +68,7 @@ TIER_HARVEST_ACQUIRE = 10
 TIER_RUMINATE        = 20   # ruminate and solo_work share tier — D decides
 TIER_SOLO_WORK       = 20
 TIER_HARVEST_PROCESS = 30
+TIER_EDGE_DECAY      = 35   # maintenance pass, no LLM call, cheap
 TIER_BACKFILL        = 40
 
 # ── Scheduler tuning ───────────────────────────────────────────────────────
@@ -292,6 +293,26 @@ def get_system_state() -> dict:
             state['seconds_since_harvest'] = float('inf')
     except Exception:
         state['seconds_since_harvest'] = float('inf')
+
+    # Time since last edge_decay pass (seconds)
+    try:
+        row = execute(
+            """SELECT completed_at FROM work_queue
+               WHERE type = 'edge_decay' AND state = 'complete'
+               ORDER BY completed_at DESC LIMIT 1""",
+            fetch='one'
+        )
+        if row and row['completed_at']:
+            last_ed = row['completed_at']
+            if last_ed.tzinfo is None:
+                last_ed = last_ed.replace(tzinfo=timezone.utc)
+            state['seconds_since_edge_decay'] = (
+                datetime.now(timezone.utc) - last_ed
+            ).total_seconds()
+        else:
+            state['seconds_since_edge_decay'] = float('inf')
+    except Exception:
+        state['seconds_since_edge_decay'] = float('inf')
 
     return state
 

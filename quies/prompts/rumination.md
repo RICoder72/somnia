@@ -108,6 +108,11 @@ Good wondering threads:
 You don't need to produce wondering threads every session. But when genuine
 curiosity fires, capture it rather than letting it pass.
 
+### Suggest edge pruning
+If an edge in the "Edges Flagged for Review" table no longer represents a
+meaningful relationship, you can suggest pruning it. You don't delete edges
+yourself — you suggest, and a future maintenance pass handles the rest.
+
 ### Suggest pins
 If an unpinned topic keeps recurring and feels durable, flag it for Matthew to
 consider pinning. You never pin things yourself.
@@ -152,7 +157,8 @@ Format this as a `continuity_note` field in your output.
     {"op": "create_node", "id": "wondering-descriptive-name", "type": "wondering-thread", "content": "The question and why it's interesting", "epistemic_status": "hypothesis", "metadata": {"trigger_nodes": ["node1", "node2"], "research_hints": "what to look for"}},
     {"op": "update_node", "id": "...", "new_content": "...", "reason": "..."},
     {"op": "append_dream_note", "id": "pinned_node_id", "note": "..."},
-    {"op": "suggest_pin", "id": "recurring-topic", "reason": "..."}
+    {"op": "suggest_pin", "id": "recurring-topic", "reason": "..."},
+    {"op": "suggest_prune_edge", "source_id": "...", "target_id": "...", "reason": "No longer meaningful"}
   ]
 }
 ```

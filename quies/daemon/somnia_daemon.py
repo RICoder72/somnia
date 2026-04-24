@@ -30,6 +30,7 @@ from work_queue import (
     JobResult,
     Budget,
     TIER_PROCESS_STM,
+    TIER_EDGE_DECAY,
 )
 
 app = Flask(__name__)
@@ -1076,6 +1077,14 @@ def apply_dream_operations(operations_json):
                         results.setdefault('pin_suggestions', []).append(
                             f"{node_id}: {reason}")
 
+                    elif op_type == 'suggest_prune_edge':
+                        # Dream cycle can suggest edge pruning but doesn't delete
+                        source_id = op.get('source_id', '')
+                        target_id = op.get('target_id', '')
+                        reason = op.get('reason', '')
+                        results.setdefault('prune_suggestions', []).append(
+                            f"{source_id}->{target_id}: {reason}")
+
                 except Exception as e:
                     results['errors'].append(f"{op_type}: {str(e)}")
 
@@ -2097,6 +2106,34 @@ def _build_rumination_prompt(graph_stats):
                         f"{n['decay_state']:.2f} | {last} |\n")
         context += "\n"
 
+    # Edges flagged for review — low-weight edges that may no longer be
+    # meaningful. Surfaced so rumination can reinforce or confirm pruning.
+    # See GRAPH-HEALTH-DESIGN.md Mechanism 4.
+    flagged_edges = execute(
+        "SELECT source_id, target_id, type, weight, last_reinforced, created_at "
+        "FROM edges WHERE flagged_for_review = TRUE "
+        "ORDER BY weight ASC LIMIT 10",
+        fetch='all') or []
+
+    if flagged_edges:
+        context += "## Edges Flagged for Review\n\n"
+        context += ("These edges have low weight and have not been reinforced recently. "
+                    "You can reinforce them if they still feel meaningful, or suggest "
+                    "pruning them with a `suggest_prune_edge` operation.\n\n")
+        context += "| Source | Target | Type | Weight | Last Reinforced |\n"
+        context += "|--------|--------|------|--------|-----------------|\n"
+        for e in flagged_edges:
+            lr = e.get('last_reinforced')
+            if isinstance(lr, datetime):
+                lr = lr.strftime('%Y-%m-%d')
+            elif lr:
+                lr = str(lr)[:10]
+            else:
+                lr = 'never'
+            context += (f"| `{e['source_id']}` | `{e['target_id']}` | "
+                        f"{e['type']} | {e['weight']:.2f} | {lr} |\n")
+        context += "\n"
+
     # Show all unpinned nodes with heat map indicator
     context += "## All Nodes (sorted coldest → warmest)\n\n"
     for node in unpinned_nodes:
@@ -2837,6 +2874,101 @@ register_activity(
     resumable=True,
     deduplicate=True,
     description='Consolidate STM inbox items into LTM graph.',
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# edge_decay — Mechanism 4: passive edge weight decay (no LLM call)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _handler_edge_decay(job: dict, budget) -> 'JobResult':
+    """
+    Decay edge weights for edges not reinforced within the configured window.
+    Flag edges below prune threshold for rumination review.
+    Pure SQL — no API call, no budget spend.
+    """
+    from work_queue import JobResult
+
+    edges_cfg = CONFIG.get('edges', {})
+    window_days = edges_cfg.get('decay_window_days', 90)
+    decay_factor = edges_cfg.get('decay_factor', 0.95)
+    prune_threshold = edges_cfg.get('prune_weight_threshold', 0.10)
+    archive_after = edges_cfg.get('archive_after_flags', 3)
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # 1. Decay edges not reinforced within window
+            cur.execute("""
+                UPDATE edges
+                SET weight = weight * %(factor)s
+                WHERE last_reinforced < NOW() - INTERVAL '1 day' * %(window)s
+                  AND weight > %(threshold)s
+                  AND is_structural = FALSE
+            """, {
+                'factor': decay_factor,
+                'window': window_days,
+                'threshold': prune_threshold,
+            })
+            decayed_count = cur.rowcount
+
+            # 2. Flag edges that have fallen below prune threshold
+            cur.execute("""
+                UPDATE edges
+                SET flagged_for_review = TRUE
+                WHERE weight <= %(threshold)s
+                  AND flagged_for_review = FALSE
+                  AND is_structural = FALSE
+            """, {'threshold': prune_threshold})
+            newly_flagged = cur.rowcount
+
+            # 3. Count currently flagged edges (for logging)
+            cur.execute("""
+                SELECT COUNT(*) FROM edges WHERE flagged_for_review = TRUE
+            """)
+            total_flagged = cur.fetchone()[0]
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        put_conn(conn)
+
+    logger.info(
+        f"Scheduler[work_queue]: edge_decay complete — "
+        f"{decayed_count} edges decayed, {newly_flagged} newly flagged, "
+        f"{total_flagged} total flagged for review"
+    )
+
+    log_event('info', 'edge_decay',
+              f'Edge decay pass: {decayed_count} decayed, {newly_flagged} flagged',
+              {'decayed': decayed_count, 'newly_flagged': newly_flagged,
+               'total_flagged': total_flagged})
+
+    return JobResult(complete=True, tokens_used=0)
+
+
+def _d_edge_decay(state: dict) -> float:
+    """
+    D score for edge_decay — time-driven, roughly daily.
+    No budget gate needed (no API cost).
+    """
+    seconds = state.get('seconds_since_edge_decay', float('inf'))
+    target = 86400.0  # 24 hours
+    if seconds == float('inf'):
+        return 0.8  # never run before — moderately urgent
+    return min(1.0, seconds / target)
+
+
+register_activity(
+    type_name='edge_decay',
+    handler=_handler_edge_decay,
+    tier=TIER_EDGE_DECAY,
+    d_fn=_d_edge_decay,
+    resumable=False,
+    deduplicate=True,
+    description='Passive edge weight decay — no API call, pure SQL maintenance.',
 )
 
 
