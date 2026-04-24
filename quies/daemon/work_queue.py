@@ -234,10 +234,16 @@ def get_system_state() -> dict:
 
     state: dict[str, Any] = {}
 
-    # Inbox depth
+    # Inbox depth — counted from stm_nodes (the live STM table).
+    # The legacy `inbox` table still exists in the schema but is no longer
+    # written to: somnia_remember and the in-session harvester both target
+    # `stm_nodes`, and the dream consolidation drains by deletion (no
+    # `processed` flag exists on stm_nodes). Reading from `inbox` here would
+    # always yield 0, which silently zeroes the D-score for `process_stm`
+    # and prevents the work_queue from ever dispatching it.
     try:
         row = execute(
-            "SELECT COUNT(*) AS n FROM inbox WHERE processed = FALSE",
+            "SELECT COUNT(*) AS n FROM stm_nodes",
             fetch='one'
         )
         state['inbox_depth'] = int(row['n']) if row else 0
