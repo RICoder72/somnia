@@ -2760,8 +2760,8 @@ def _handler_process_stm(job: dict, budget: Budget) -> JobResult:
     ops = result.get('operations') or {}
     logger.info(
         f"Scheduler[work_queue]: process_stm complete — "
-        f"{len(ops.get('nodes_created') or [])} nodes, "
-        f"{len(ops.get('edges_created') or [])} edges, "
+        f"{ops.get('nodes_created', 0)} nodes, "
+        f"{ops.get('edges_created', 0)} edges, "
         f"{tokens} tokens, dream_id={(result.get('dream_id') or '')[:8]}"
     )
 
