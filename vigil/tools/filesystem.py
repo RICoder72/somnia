@@ -125,6 +125,26 @@ def register(mcp: FastMCP):
         return f"✅ Moved: {source} → {destination}"
 
     @mcp.tool()
+    async def fs_replace(ctx: Context, path: str, old: str, new: str, workspace: str = "") -> str:
+        """Replace a unique string in a file (must appear exactly once)."""
+        target = await validate_fs_write(ctx, path, workspace_override=workspace or None)
+        if not target.exists():
+            return f"❌ File does not exist: {path}"
+        if not target.is_file():
+            return f"❌ Not a file: {path}"
+        try:
+            content = target.read_text()
+        except UnicodeDecodeError:
+            return f"❌ Cannot read binary file: {path}"
+        count = content.count(old)
+        if count == 0:
+            return f"❌ String not found in {path}"
+        if count > 1:
+            return f"❌ Found {count} occurrences (need exactly 1)"
+        target.write_text(content.replace(old, new))
+        return f"✅ Replaced in {path}"
+
+    @mcp.tool()
     async def fs_copy(ctx: Context, source: str, destination: str, workspace: str = "") -> str:
         """Copy file or directory.
 
