@@ -3,15 +3,42 @@ Session tools — session_start and ping.
 """
 
 import json
+import logging
 import sqlite3
+
+import requests
 from datetime import datetime
 from pathlib import Path
 from fastmcp import FastMCP, Context
 
 from config import WORKSPACES_DIR, DATA_ROOT, DOMAIN_TRIGGERS_FILE
+
+logger = logging.getLogger("vigil.session")
+SOMNIA_ROUTE_URL = "http://quies:8010/route"
 from core.bindings import set_active_workspace
 
 SOMNIA_DB = DATA_ROOT / "somnia" / "db" / "somnia.db"
+
+
+
+
+def _route_via_somnia(message: str) -> list[dict] | None:
+    """Call somnia_route stored procedure for graph-native workspace routing.
+
+    Returns list of candidates [{workspace, confidence, reason, ...}]
+    or None if Somnia is unreachable.
+    """
+    if not message:
+        return None
+    try:
+        r = requests.get(SOMNIA_ROUTE_URL, params={"message": message, "limit": 5}, timeout=3)
+        if r.status_code == 200:
+            return r.json().get("candidates", [])
+        logger.warning(f"somnia_route returned {r.status_code}")
+        return None
+    except requests.RequestException as e:
+        logger.warning(f"somnia_route unreachable: {e}")
+        return None
 
 
 def _load_domain_config() -> dict:
@@ -235,13 +262,36 @@ def register(mcp: FastMCP):
                 lines.append(f"   • {d['name']}{desc}{triggers}")
             lines.append("")
 
-        # ── Auto-detect domain ────────────────────────────────────
+        # ── Auto-detect domain (via Somnia graph routing) ─────────
         detected = None
+        route_candidates = []
         if user_message:
-            detected = _detect_domain(user_message, domain_keywords)
-            if detected:
-                lines.append(f"🎯 Auto-detected domain: {detected}")
-                lines.append("")
+            # Try graph-native routing first
+            route_candidates = _route_via_somnia(user_message) or []
+            if route_candidates:
+                top = route_candidates[0]
+                if top["confidence"] >= 0.5:
+                    # High confidence — auto-activate
+                    detected = top["workspace"]
+                    lines.append(f"🎯 Auto-detected domain: {detected}")
+                    lines.append("")
+                else:
+                    # Low confidence — show candidates but don't auto-activate
+                    lines.append("🔍 **Possible workspaces** (low confidence):")
+                    for c in route_candidates[:3]:
+                        lines.append(
+                            f"   • {c['workspace']} ({c['confidence']:.0%}) — {c['reason']}"
+                        )
+                    lines.append(
+                        "   Use `workspace_activate` to set one explicitly."
+                    )
+                    lines.append("")
+            else:
+                # Fallback to legacy trigger matching if Somnia unreachable
+                detected = _detect_domain(user_message, domain_keywords)
+                if detected:
+                    lines.append(f"🎯 Auto-detected domain: {detected} (via fallback)")
+                    lines.append("")
 
         # ── Track active workspace for binding resolution ─────────
         await set_active_workspace(ctx, detected)
