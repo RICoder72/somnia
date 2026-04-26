@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, jsonify, request
 import yaml
+from settings import cfg, cfg_section, raw_yaml, APP_DIR, DATA_DIR, SOLO_WORK_DIR, CONFIG_PATH
 
 from db import execute, execute_many, init_db as db_init, get_conn, put_conn
 from work_queue import (
@@ -37,53 +38,29 @@ app = Flask(__name__)
 logger = logging.getLogger(__name__)
 
 # Paths - separate app code from persistent data
-APP_DIR = Path(os.environ.get("SOMNIA_APP_DIR", "/app"))
-DATA_DIR = Path(os.environ.get("SOMNIA_DATA_DIR", "/data/somnia"))
-SOLO_WORK_DIR = Path(os.environ.get("QUIES_SOLO_WORK_DIR", str(DATA_DIR / "solo-work")))
-
-CONFIG_PATH = APP_DIR / "daemon" / "config.yaml"
+# Path constants and CONFIG_PATH now imported from settings
 PROMPTS_DIR = APP_DIR / "prompts"
 
 
 # ============================================================================
-# CONFIG
-# ============================================================================
-
-def load_config():
-    if not CONFIG_PATH.exists():
-        app.logger.warning(f"Config not found at {CONFIG_PATH}, using defaults")
-        return {
-            'api': {
-                'model': 'claude-sonnet-4-20250514',
-                'credentials_ref': 'op://Key Vault/Anthropic API/credential',
-                'oauth_credentials_ref': 'op://Key Vault/Claude Code OAuth/credential'
-            },
-            'consolidation': {
-                'min_inbox_items': 1
-            },
-            'scheduler': {
-                'enabled': True,
-                'check_interval_minutes': 15,
-                'global_cooldown_minutes': 240,
-                'rumination_cooldown_minutes': 360,
-                'solo_work_cooldown_minutes': 360,
-                'min_nodes_for_rumination': 5
-            }
-        }
-    with open(CONFIG_PATH) as f:
-        config = yaml.safe_load(f)
-    if 'scheduler' not in config:
-        config['scheduler'] = {
-            'enabled': True,
-            'check_interval_minutes': 15,
-            'global_cooldown_minutes': 240,
-            'rumination_cooldown_minutes': 360,
-            'solo_work_cooldown_minutes': 360,
-            'min_nodes_for_rumination': 5
-        }
-    return config
-
-CONFIG = load_config()
+# CONFIG — resolved by settings.py (env → yaml → defaults)
+# Legacy CONFIG dict retained as a shim for code that reads nested
+# structures directly (decay.type_profiles, etc.). New code should
+# use cfg("section.key") or cfg_section("section").
+CONFIG = {
+    'api': cfg_section('api'),
+    'scheduler': cfg_section('scheduler'),
+    'budget': cfg_section('budget'),
+    'decay': cfg_section('decay'),
+    'edges': cfg_section('edges'),
+    'graph': cfg_section('graph'),
+    'logging': cfg_section('logging'),
+    # Legacy alias — code that reads CONFIG['consolidation'] gets
+    # redirected to scheduler values.
+    'consolidation': {
+        'min_inbox_items': cfg('scheduler.min_inbox_items'),
+    },
+}
 
 # ============================================================================
 # STRUCTURAL EDGE TYPES
@@ -169,8 +146,7 @@ def get_claude_auth():
     if api_key:
         return ('api_key', api_key)
 
-    oauth_ref = CONFIG['api'].get('oauth_credentials_ref',
-                                   'op://Key Vault/Claude Code OAuth/credential')
+    oauth_ref = cfg('api.oauth_credentials_ref')
     try:
         result = subprocess.run(
             ["op", "read", oauth_ref],
@@ -181,8 +157,7 @@ def get_claude_auth():
     except (FileNotFoundError, Exception) as e:
         app.logger.debug(f"OAuth token not in 1Password: {e}")
 
-    api_ref = CONFIG['api'].get('credentials_ref',
-                                 'op://Key Vault/Anthropic API/credential')
+    api_ref = cfg('api.credentials_ref')
     try:
         result = subprocess.run(
             ["op", "read", api_ref],
@@ -213,8 +188,7 @@ def get_api_key():
     key = os.environ.get("ANTHROPIC_API_KEY")
     if key:
         return key
-    api_ref = CONFIG['api'].get('credentials_ref',
-                                 'op://Key Vault/Anthropic API/credential')
+    api_ref = cfg('api.credentials_ref')
     try:
         result = subprocess.run(
             ["op", "read", api_ref],
@@ -455,8 +429,7 @@ def check_global_cooldown():
     
     Returns (ok: bool, reason: str).
     """
-    cooldown_min = CONFIG.get('scheduler', {}).get('global_cooldown_minutes',
-                   CONFIG.get('consolidation', {}).get('cooldown_minutes', 240))
+    cooldown_min = cfg('scheduler.global_cooldown_minutes')
     cooldown = timedelta(minutes=cooldown_min)
 
     last_dream_end = get_last_phase_end()
@@ -786,7 +759,7 @@ def should_solo_work():
         return False, reason
 
     # Own cooldown: time since last solo-work
-    own_cooldown_min = sched.get('solo_work_cooldown_minutes', 360)
+    own_cooldown_min = cfg('scheduler.solo_work_cooldown_minutes')
     last_solo = get_last_phase_end('[solo_work]')
     if last_solo:
         now = datetime.now(last_solo.tzinfo) if last_solo.tzinfo else datetime.now()
@@ -797,8 +770,8 @@ def should_solo_work():
 
     # Budget check
     daily_cost = get_daily_cost()
-    max_daily = budget.get('max_cost_per_day', 2.00)
-    max_session = budget.get('max_cost_solo_work', 1.00)
+    max_daily = cfg('budget.max_cost_per_day')
+    max_session = cfg('budget.max_cost_solo_work')
     if daily_cost + max_session > max_daily:
         return False, f"Budget: ${daily_cost:.2f} spent today, solo-work could exceed ${max_daily:.2f} cap"
 
@@ -826,7 +799,7 @@ def should_archaeologize():
     if not ok:
         return False, reason
 
-    own_cooldown_min = sched.get('archaeology_cooldown_minutes', 720)
+    own_cooldown_min = cfg('scheduler.archaeology_cooldown_minutes')
     last_arch = get_last_phase_end('[archaeologize]')
     if last_arch:
         now = datetime.now(last_arch.tzinfo) if last_arch.tzinfo else datetime.now()
@@ -836,8 +809,8 @@ def should_archaeologize():
             return False, f"Archaeology cooldown active, {remaining.seconds // 60}m remaining"
 
     daily_cost = get_daily_cost()
-    max_daily = budget.get('max_cost_per_day', 2.00)
-    max_session = budget.get('max_cost_archaeology', 0.30)
+    max_daily = cfg('budget.max_cost_per_day')
+    max_session = cfg('budget.max_cost_archaeology')
     if daily_cost + max_session > max_daily:
         return False, f"Budget: ${daily_cost:.2f} spent today, archaeology could exceed ${max_daily:.2f} cap"
 
@@ -1001,7 +974,7 @@ def apply_dream_operations(operations_json):
                               op.get('type', 'relates_to'), op.get('weight', 1.0)))
                         results['edges_created'].append(edge_id)
                         # Heat map: warm both nodes involved in new edge
-                        dream_warmth = CONFIG.get('decay', {}).get('dream_edge_warmth', 0.03)
+                        dream_warmth = cfg('decay.dream_edge_warmth')
                         for nid in (op.get('source_id'), op.get('target_id')):
                             if nid:
                                 cur.execute("""
@@ -1163,8 +1136,9 @@ def log_diagnostics(dream_id, graph_stats_before, graph_stats_after=None,
 def can_dream():
     """Check if conditions are met for a processing dream."""
     inbox = get_inbox_items()
-    if len(inbox) < CONFIG['consolidation']['min_inbox_items']:
-        return False, f"Inbox has {len(inbox)} items, need {CONFIG['consolidation']['min_inbox_items']}"
+    _min_inbox = cfg('scheduler.min_inbox_items')
+    if len(inbox) < _min_inbox:
+        return False, f"Inbox has {len(inbox)} items, need {_min_inbox}"
 
     # Global cooldown gate
     ok, reason = check_global_cooldown()
@@ -1174,8 +1148,8 @@ def can_dream():
     # Budget check
     budget = CONFIG.get('budget', {})
     daily_cost = get_daily_cost()
-    max_daily = budget.get('max_cost_per_day', 2.00)
-    max_session = budget.get('max_cost_dream', 0.30)
+    max_daily = cfg('budget.max_cost_per_day')
+    max_session = cfg('budget.max_cost_dream')
     if daily_cost + max_session > max_daily:
         return False, f"Budget: ${daily_cost:.2f} spent today, dream could exceed ${max_daily:.2f} cap"
 
@@ -1204,7 +1178,7 @@ def should_ruminate():
         return False, reason
 
     # Own cooldown: time since last rumination
-    own_cooldown_min = sched.get('rumination_cooldown_minutes', 360)
+    own_cooldown_min = cfg('scheduler.rumination_cooldown_minutes')
     last_rumination = get_last_phase_end('[ruminate]')
     if last_rumination:
         now = datetime.now(last_rumination.tzinfo) if last_rumination.tzinfo else datetime.now()
@@ -1216,8 +1190,8 @@ def should_ruminate():
     # Budget check
     budget = CONFIG.get('budget', {})
     daily_cost = get_daily_cost()
-    max_daily = budget.get('max_cost_per_day', 2.00)
-    max_session = budget.get('max_cost_rumination', 0.30)
+    max_daily = cfg('budget.max_cost_per_day')
+    max_session = cfg('budget.max_cost_rumination')
     if daily_cost + max_session > max_daily:
         return False, f"Budget: ${daily_cost:.2f} spent today, rumination could exceed ${max_daily:.2f} cap"
 
@@ -1279,7 +1253,7 @@ what you investigated, produce a minimal honest entry. Output exactly ONE JSON b
         return None
 
     try:
-        model = CONFIG['api'].get('model', 'claude-sonnet-4-20250514')
+        model = cfg('api.model')
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
             model=model,
@@ -1361,7 +1335,7 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
     if not api_key:
         return {"error": "No authentication configured."}
 
-    model = CONFIG['api'].get('model', 'claude-sonnet-4-20250514')
+    model = cfg('api.model')
     max_tokens = _get_max_tokens_for_mode(mode)
     # Note: budget_override is intentionally NOT used here to fudge max_tokens.
     # The previous implementation translated USD → output token cap, which
@@ -2583,7 +2557,7 @@ def _build_portal_health():
     stats = get_graph_stats()
     daily_cost = get_daily_cost()
     budget_cfg = CONFIG.get('budget', {})
-    daily_cap = budget_cfg.get('max_cost_per_day', 2.00)
+    daily_cap = cfg('budget.max_cost_per_day')
 
     error_rows = execute(
         "SELECT level, COUNT(*) as count FROM system_log "
@@ -2813,7 +2787,7 @@ def _handler_process_stm(job: dict, budget: Budget) -> JobResult:
     except Exception:
         remaining = 0
 
-    min_items = CONFIG.get('consolidation', {}).get('min_inbox_items', 1)
+    min_items = cfg('scheduler.min_inbox_items')
     if remaining >= min_items:
         return JobResult(
             complete=False,
@@ -2835,16 +2809,15 @@ def _d_process_stm(state: dict) -> float:
     the consolidation batch size).
     """
     inbox = int(state.get('inbox_depth', 0))
-    min_items = CONFIG.get('consolidation', {}).get('min_inbox_items', 1)
+    min_items = cfg('scheduler.min_inbox_items')
     if inbox < min_items:
         return 0.0
 
     # Budget gate — same math as can_dream()
     try:
-        budget_cfg = CONFIG.get('budget', {})
         daily = get_daily_cost()
-        max_daily = budget_cfg.get('max_cost_per_day', 2.00)
-        max_session = budget_cfg.get('max_cost_dream', 0.30)
+        max_daily = cfg('budget.max_cost_per_day')
+        max_session = cfg('budget.max_cost_dream')
         if daily + max_session > max_daily:
             return 0.0
     except Exception:
@@ -2975,7 +2948,7 @@ register_activity(
 def dream_scheduler():
     """Background thread that periodically checks if it's time to dream."""
     sched = CONFIG.get('scheduler', {})
-    interval = sched.get('check_interval_minutes', 15) * 60
+    interval = cfg('scheduler.check_interval_minutes') * 60
     _last_backup_date = None
 
     logger.info(f"Dream scheduler started (checking every {interval // 60} min)")
@@ -3011,10 +2984,8 @@ def dream_scheduler():
             # matching the old can_dream()-then-else behavior).
             try:
                 cycle_summary = run_cycle(
-                    budget_tokens=CONFIG.get('scheduler', {}).get(
-                        'cycle_max_tokens', 50_000),
-                    budget_seconds=CONFIG.get('scheduler', {}).get(
-                        'cycle_max_seconds', 1200.0),
+                    budget_tokens=cfg('scheduler.cycle_max_tokens'),
+                    budget_seconds=cfg('scheduler.cycle_max_seconds'),
                 )
             except Exception as e:
                 logger.error(f"Scheduler: work queue cycle raised: {e}", exc_info=True)
@@ -3237,17 +3208,17 @@ def status():
         "graph": stats, "activity": activity,
         "budget": {
             "daily_cost": round(daily_cost, 4),
-            "daily_cap": CONFIG.get('budget', {}).get('max_cost_per_day', 2.00),
-            "remaining": round(CONFIG.get('budget', {}).get('max_cost_per_day', 2.00) - daily_cost, 4)
+            "daily_cap": cfg('budget.max_cost_per_day'),
+            "remaining": round(cfg('budget.max_cost_per_day') - daily_cost, 4)
         },
         "last_dream": {
             "id": last['id'] if last else None,
             "ended_at": last['ended_at'] if last else None
         } if last else None,
         "config": {
-            "min_inbox_items": CONFIG['consolidation']['min_inbox_items'],
-            "global_cooldown_minutes": CONFIG.get('scheduler', {}).get('global_cooldown_minutes', 240),
-            "scheduler": CONFIG.get('scheduler', {})
+            "min_inbox_items": cfg('scheduler.min_inbox_items'),
+            "global_cooldown_minutes": cfg('scheduler.global_cooldown_minutes'),
+            "scheduler": cfg_section('scheduler')
         }
     })
 
@@ -4125,7 +4096,7 @@ def debug_cli_test():
     # Test with --print --output-format json (production mode)
     cmd = ["claude", "-p", test_prompt, "--print", "--output-format", "json",
            "--dangerously-skip-permissions",
-           "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
+           "--model", cfg('api.model'),
            "--max-turns", "1"]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
     try:
@@ -4144,7 +4115,7 @@ def debug_cli_test():
     # Test with --output-format json only (no --print)
     cmd2 = ["claude", "-p", test_prompt, "--output-format", "json",
             "--dangerously-skip-permissions",
-            "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
+            "--model", cfg('api.model'),
             "--max-turns", "1"]
     r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=300, env=env)
     try:
@@ -4163,7 +4134,7 @@ def debug_cli_test():
     # Test with --print only (raw text)
     cmd3 = ["claude", "-p", test_prompt, "--print",
             "--dangerously-skip-permissions",
-            "--model", CONFIG['api'].get('model', 'claude-sonnet-4-20250514'),
+            "--model", cfg('api.model'),
             "--max-turns", "1"]
     r3 = subprocess.run(cmd3, capture_output=True, text=True, timeout=300, env=env)
     results['print_only'] = {
@@ -4625,7 +4596,7 @@ if __name__ == "__main__":
     db_init()
 
     # Start dream scheduler
-    sched_config = CONFIG.get('scheduler', {})
+    sched_config = cfg_section('scheduler')
     is_reloader_child = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
     should_start_scheduler = (
         sched_config.get('enabled', True) and
