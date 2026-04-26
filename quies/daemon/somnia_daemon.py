@@ -4223,6 +4223,124 @@ def search_nodes():
     })
 
 
+
+# ============================================================================
+# WORKSPACE ROUTING (stored procedure)
+# ============================================================================
+
+@app.route("/route", methods=["GET"])
+def route_workspace():
+    """Graph-native workspace routing.
+
+    Takes a user message, matches against trigger keywords on workspace
+    nodes, returns ranked candidates with confidence scores. This is a
+    'stored procedure' — intelligence lives here, not in the graph structure.
+
+    Query params:
+        message: The user's message to route
+        limit: Max candidates to return (default 3)
+    """
+    message = request.args.get("message", "").strip()
+    if not message:
+        return jsonify({"error": "message parameter required"}), 400
+    limit = request.args.get("limit", 3, type=int)
+
+    # Normalise the message for matching
+    msg_lower = message.lower()
+    # Split into words for individual token matching
+    msg_words = set(re.findall(r'[a-z0-9]+(?:[-][a-z0-9]+)*', msg_lower))
+
+    # Fetch all workspace nodes with their triggers and edge counts
+    try:
+        rows = execute("""
+            SELECT n.id, n.content,
+                   n.metadata->>'workspace' as workspace,
+                   n.metadata->'triggers' as triggers_json,
+                   (SELECT count(*) FROM edges
+                    WHERE source_id = n.id OR target_id = n.id) as edge_count
+            FROM nodes n
+            WHERE n.metadata->>'node_type' = 'workspace'
+              AND n.pinned = true
+              AND n.metadata->>'workspace' IS NOT NULL
+              AND n.metadata->'triggers' IS NOT NULL
+        """, fetch='all')
+    except Exception as e:
+        logger.error(f"Route query failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+    candidates = []
+    for row in rows:
+        workspace = row['workspace']
+        try:
+            triggers = json.loads(row['triggers_json']) if isinstance(row['triggers_json'], str) else row['triggers_json']
+        except (json.JSONDecodeError, TypeError):
+            triggers = []
+
+        if not triggers:
+            continue
+
+        # Score: count how many triggers match
+        # A trigger matches if it appears as a substring in the message
+        # or if all words in a multi-word trigger appear in the message words
+        matches = []
+        for trigger in triggers:
+            trigger_lower = trigger.lower()
+            trigger_words = set(trigger_lower.split())
+
+            # Exact substring match (handles multi-word triggers like "bite club")
+            if trigger_lower in msg_lower:
+                matches.append(trigger)
+            # Word-level match (handles cases where trigger words appear but not contiguously)
+            elif trigger_words and trigger_words.issubset(msg_words):
+                matches.append(trigger)
+
+        if not matches:
+            continue
+
+        # Confidence scoring:
+        #   Base: ratio of matched triggers to message words (how much of
+        #         the message is explained by this workspace)
+        #   Boost: longer trigger matches score higher (more specific)
+        #   Edge density is NOT used for scoring (per design decision)
+        #     but is returned for informational purposes.
+
+        # Longest match length as a specificity signal
+        longest_match = max(len(m.split()) for m in matches)
+        # Coverage: what fraction of message words are covered by trigger matches
+        covered_words = set()
+        for m in matches:
+            covered_words.update(m.lower().split())
+        coverage = len(covered_words & msg_words) / max(len(msg_words), 1)
+
+        # Score: match count + specificity bonus + coverage
+        score = (
+            len(matches) * 0.3 +          # more matches = better
+            longest_match * 0.3 +          # longer trigger = more specific
+            coverage * 0.4                 # higher coverage = more confident
+        )
+
+        # Normalise to 0-1 range (soft cap)
+        confidence = min(score / 2.0, 1.0)
+
+        candidates.append({
+            "workspace": workspace,
+            "confidence": round(confidence, 3),
+            "matched_triggers": matches,
+            "edge_count": row['edge_count'],
+            "reason": f"Matched {len(matches)} trigger(s): {', '.join(matches[:3])}"
+                      + (f" (+{len(matches)-3} more)" if len(matches) > 3 else "")
+        })
+
+    # Sort by confidence descending
+    candidates.sort(key=lambda c: c['confidence'], reverse=True)
+
+    return jsonify({
+        "message": message,
+        "candidates": candidates[:limit],
+        "total_matches": len(candidates),
+    })
+
+
 # ============================================================================
 # DASHBOARD
 # ============================================================================

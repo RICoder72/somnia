@@ -1040,6 +1040,48 @@ def somnia_analytics(
         return f"Analytics unavailable: {e}"
 
 
+
+
+@mcp.tool()
+def somnia_route(
+    message: str,
+    limit: int = 3
+) -> str:
+    """Route a user message to the most relevant workspace.
+
+    Graph-native workspace detection — matches the message against
+    trigger keywords stored on workspace nodes in the graph. Returns
+    ranked candidates with confidence scores.
+
+    Use this at session start to determine which workspace to activate.
+    High confidence (>0.6): auto-activate. Lower: present options or
+    ask. Zero matches: no workspace context needed, or offer to create one.
+
+    Args:
+        message: The user's message to route
+        limit: Max candidates to return (default 3)
+    """
+    result = _api_get("/route", params={"message": message, "limit": limit})
+
+    if "error" in result:
+        return f"Routing failed: {result['error']}"
+
+    candidates = result.get("candidates", [])
+    total = result.get("total_matches", 0)
+
+    if not candidates:
+        return "No workspace matches for this message."
+
+    lines = [f"Workspace routing ({total} match{'es' if total != 1 else ''}):\n"]
+    for c in candidates:
+        conf_bar = "█" * int(c['confidence'] * 10) + "░" * (10 - int(c['confidence'] * 10))
+        lines.append(
+            f"  {conf_bar} {c['confidence']:.0%}  {c['workspace']}"
+            f"  ({c['reason']})"
+        )
+
+    return "\n".join(lines)
+
 # =============================================================================
 # MAIN
 # =============================================================================
