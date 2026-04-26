@@ -1,8 +1,13 @@
-# Somnia Daemon Configuration
-
-# Consolidation triggers
-consolidation:
-  min_inbox_items: 1
+# Quies Daemon Configuration
+#
+# All values can be overridden via environment variables using the
+# QUIES_ prefix with double-underscore section separators:
+#   QUIES_SCHEDULER__GLOBAL_COOLDOWN_MINUTES=120
+#   QUIES_BUDGET__MAX_COST_PER_DAY=3.00
+#   QUIES_API__MODEL=claude-sonnet-4-20250514
+#
+# Defaults for every parameter are defined in daemon/settings.py.
+# This file overrides those defaults; env vars override this file.
 
 # Dream scheduler (background thread)
 scheduler:
@@ -11,17 +16,18 @@ scheduler:
   global_cooldown_minutes: 240      # 4 hours between ANY autonomous phase
   rumination_cooldown_minutes: 360  # 6 hours between rumination sessions
   solo_work_cooldown_minutes: 360   # 6 hours between solo-work sessions
-  min_nodes_for_rumination: 5       # need enough knowledge to reflect on
+  archaeology_cooldown_minutes: 720 # 12 hours between archaeology sessions
   solo_work_max_duration_minutes: 20  # wall clock limit for solo-work
-  archaeology_cooldown_minutes: 720   # 12 hours between archaeology sessions
+  min_nodes_for_rumination: 5       # need enough knowledge to reflect on
+  min_inbox_items: 1                # minimum inbox depth to trigger processing
 
-  # Work-queue cycle budgets (Track A Phase 2 — process_stm and later activities).
-  # cycle_max_tokens is a soft ceiling across all handler iterations in one tick;
-  # cycle_max_seconds is a hard wall-clock cap. Per-handler cost enforcement
-  # (daily cap, per-session cap) still lives in the activity's d_fn and in
-  # run_consolidation itself.
+  # Work-queue cycle budgets
   cycle_max_tokens: 50000
   cycle_max_seconds: 1200
+
+  # SLTM opportunistic sampling during rumination
+  sltm_opportunistic_probability: 0.30
+  sltm_opportunistic_limit: 8
 
 # Budget & cost controls
 budget:
@@ -50,63 +56,40 @@ graph:
 
 # Decay settings
 decay:
-  passive_cooldown_per_cycle: 0.0005  # per scheduler check (~15min). ~0.048/day, ~20 days to fully cool
-  sltm_threshold: 0.05               # nodes below this decay demote to SLTM (super long-term)
+  passive_cooldown_per_cycle: 0.0005  # per scheduler tick (~15min). ~0.048/day
+  sltm_threshold: 0.05               # nodes below this demote to SLTM
   pinned_floor: 0.5                  # pinned nodes won't decay below this
   prune_threshold: 0.1               # future: archive nodes below this
   stable_reinforcement_count: 5
-  reinforcement_floor: 0.20          # nodes reinforced >= stable_reinforcement_count times won't decay below this
-  dream_edge_warmth: 0.03            # warmth applied to nodes when dream creates an edge to them
-  connectivity_decay_reduction: true  # nodes with more edges decay slower
-  connectivity_tiers:                 # edge_count: decay_multiplier (lower = slower cooling)
-    5: 0.75                           # 5+ edges: 75% of normal decay
-    10: 0.50                          # 10+ edges: 50% of normal decay
-    20: 0.25                          # 20+ edges: 25% of normal decay
-
-  # ── Decay reform (pg_009) ─────────────────────────────────────────────
-  # Hard floor for foundational=true nodes. Overrides everything else.
+  reinforcement_floor: 0.20
+  dream_edge_warmth: 0.03
+  connectivity_decay_reduction: true
+  connectivity_tiers:
+    5: 0.75
+    10: 0.50
+    20: 0.25
   foundational_floor: 0.35
-
-  # Per-edge floor contribution for the connectivity floor.
-  # Effective floor = min(connectivity_floor_max, edge_count * connectivity_floor_per_edge)
-  # Example: a node with 22 edges has connectivity_floor = min(0.30, 0.22) = 0.22
-  # Example: a node with 37 edges has connectivity_floor = min(0.30, 0.37) = 0.30
   connectivity_floor_per_edge: 0.01
   connectivity_floor_max: 0.30
-
-  # Type-based decay profiles. Each profile is (rate_multiplier, floor).
-  # rate_multiplier scales the base passive_cooldown_per_cycle for nodes of
-  # that type. floor is the type's minimum decay_state — protects core
-  # conceptual nodes from time-decay alone.
-  #
-  # Effective floor for any node = max(
-  #     pinned_floor (if pinned),
-  #     foundational_floor (if foundational),
-  #     type_profile.floor,
-  #     connectivity_floor (computed from edge count),
-  #     reinforcement_floor (if reinforced enough)
-  # )
-  #
-  # Whichever protection applies most strongly wins.
   type_profiles:
-    personality:    { rate_multiplier: 0.05, floor: 0.40 }  # DCAT loop — character traits
-    archetype:      { rate_multiplier: 0.10, floor: 0.35 }  # foundational patterns
-    concept:        { rate_multiplier: 0.30, floor: 0.20 }  # durable ideas
-    principle:      { rate_multiplier: 0.30, floor: 0.20 }  # durable ideas
-    insight:        { rate_multiplier: 0.60, floor: 0.10 }  # significant but time-bound
-    fact:           { rate_multiplier: 1.00, floor: 0.05 }  # standard rate
-    procedure:      { rate_multiplier: 1.00, floor: 0.05 }  # standard rate
-    memory:         { rate_multiplier: 1.00, floor: 0.00 }  # episodic — can fully fade
-    event:          { rate_multiplier: 1.00, floor: 0.00 }  # episodic — can fully fade
-    wondering-thread: { rate_multiplier: 0.70, floor: 0.05 }  # semi-durable exploration
-
+    personality:       { rate_multiplier: 0.05, floor: 0.40 }
+    archetype:         { rate_multiplier: 0.10, floor: 0.35 }
+    concept:           { rate_multiplier: 0.30, floor: 0.20 }
+    principle:         { rate_multiplier: 0.30, floor: 0.20 }
+    insight:           { rate_multiplier: 0.60, floor: 0.10 }
+    fact:              { rate_multiplier: 1.00, floor: 0.05 }
+    procedure:         { rate_multiplier: 1.00, floor: 0.05 }
+    memory:            { rate_multiplier: 1.00, floor: 0.00 }
+    event:             { rate_multiplier: 1.00, floor: 0.00 }
+    wondering-thread:  { rate_multiplier: 0.70, floor: 0.05 }
 
 # Edge lifecycle
 edges:
-  decay_window_days: 90          # edges not reinforced within this window start losing weight
-  decay_factor: 0.95             # weight multiplier per edge_decay pass
-  prune_weight_threshold: 0.10   # flag for review below this weight
-  archive_after_flags: 3         # auto-archive if still flagged after N passes
+  decay_window_days: 90
+  decay_factor: 0.95
+  prune_weight_threshold: 0.10
+  archive_after_flags: 3
+
 # Logging
 logging:
   level: INFO
