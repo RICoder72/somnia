@@ -7,6 +7,7 @@ from fastmcp import Context
 
 from .manager import MailManager
 from .adapters.gmail import GmailAdapter
+from .adapters.outlook import OutlookAdapter
 
 from core.binding_helpers import resolve_or_error
 
@@ -22,6 +23,7 @@ def register(mcp) -> None:
     try:
         mail_manager = MailManager()
         mail_manager.register_adapter_type("gmail", GmailAdapter)
+        mail_manager.register_adapter_type("outlook", OutlookAdapter)
         logger.info("✅ Mail service initialized")
     except Exception as e:
         logger.error(f"❌ Mail service failed to initialize: {e}")
