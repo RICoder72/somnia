@@ -60,6 +60,12 @@ fine, explore elsewhere.
 documentation could answer — a best practice, a reference implementation, a standard
 — you can look it up. Don't research speculatively, but do follow threads that need it.
 
+**Diversity.** Check the Recent Dream Activity section of your context. If a topic
+appears in the last 3 solo-work or rumination summaries, choose a different area of
+the graph unless you have a genuinely novel angle — not a restatement, not a deeper
+look at the same question, but a materially different claim or connection. The graph
+has 30+ pinned domains; the same two or three shouldn't dominate every cycle.
+
 ## What You Produce
 
 Your output is a **notebook entry** — a record of what you explored, what you found
