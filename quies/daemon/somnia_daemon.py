@@ -4175,10 +4175,16 @@ def search_nodes():
     query = request.args.get("q")
     if not query:
         return jsonify({"error": "Query parameter 'q' required"}), 400
+    # Ensure URL-encoded + signs are treated as spaces (some proxies
+    # pass them through literally, which to_tsquery interprets as the
+    # <-> FOLLOWED BY operator — producing phrase searches instead of
+    # keyword searches)
+    query = query.replace('+', ' ')
     limit = request.args.get("limit", 20, type=int)
 
-    # Convert query to tsquery format — handle multi-word by joining with &
-    ts_query = ' & '.join(word for word in query.split() if word)
+    # Convert query to tsquery format — use OR so partial matches surface,
+    # ts_rank ensures nodes matching more terms sort higher
+    ts_query = ' | '.join(word for word in query.split() if word)
 
     ltm_nodes = []
     try:

@@ -17,10 +17,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     reinforcement_count INTEGER DEFAULT 1,
     decay_state REAL DEFAULT 1.0,
     pinned BOOLEAN DEFAULT FALSE,
-    search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED
+    search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, '') || ' ' || coalesce(replace(id, '-', ' '), '') || ' ' || coalesce(type, ''))) STORED
 );
-
-CREATE TABLE IF NOT EXISTS edges (
     id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     target_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -41,7 +39,7 @@ CREATE TABLE IF NOT EXISTS stm_nodes (
     domain TEXT,
     source TEXT,
     captured_at TIMESTAMPTZ DEFAULT NOW(),
-    search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED
+    search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, '') || ' ' || coalesce(replace(id, '-', ' '), ''))) STORED
 );
 
 CREATE TABLE IF NOT EXISTS stm_edges (
