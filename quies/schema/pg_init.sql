@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     pinned BOOLEAN DEFAULT FALSE,
     search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, '') || ' ' || coalesce(replace(id, '-', ' '), '') || ' ' || coalesce(type, ''))) STORED
 );
+
+CREATE TABLE IF NOT EXISTS edges (
     id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     target_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
