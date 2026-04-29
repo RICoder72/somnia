@@ -1555,8 +1555,25 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
             _daemon_path = str(APP_DIR / "daemon")
             if _daemon_path not in _sys.path:
                 _sys.path.insert(0, _daemon_path)
-            from sticky_notes import update_dream_focus
+            from sticky_notes import (
+                update_dream_focus, update_open_threads,
+                update_for_next_claude
+            )
             update_dream_focus(mode, summary[:400] if summary else "(no summary)")
+
+            # Rumination: pass continuity note as handoff context
+            if mode == 'ruminate' and dream_ops and dream_ops.get('continuity_note'):
+                update_for_next_claude(dream_ops['continuity_note'])
+
+            # Solo-work: pass threads as open threads, summary as handoff
+            if mode == 'solo_work' and dream_ops:
+                if dream_ops.get('threads'):
+                    update_open_threads(dream_ops['threads'])
+                if summary:
+                    nodes_ct = len(op_results.get('nodes_created', []))
+                    update_for_next_claude(
+                        f"[solo_work] {nodes_ct} nodes created. {summary[:200]}"
+                    )
         except Exception as _sne:
             logger.debug(f"sticky_notes update skipped: {_sne}")
 

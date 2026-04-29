@@ -1082,6 +1082,69 @@ def somnia_route(
 
     return "\n".join(lines)
 
+
+@mcp.tool()
+def somnia_sticky_notes(
+    section: str,
+    content: str,
+    conv_name: str = "",
+    conv_uuid: str = "",
+    obs_count: int = 0,
+    status: str = "ok"
+) -> str:
+    """Update sticky notes for cross-session continuity.
+
+    Sections:
+      ledger       — Append a processed-conversation entry (requires conv_name, conv_uuid)
+      state_flags  — Update harvest/inbox status
+      open_threads — Replace the open threads section
+      for_next     — Prepend a handoff message for the next Claude instance
+
+    Called by Claude during in-session harvests to keep the sticky notes
+    current. The daemon handles dream-cycle updates automatically.
+
+    Args:
+        section: Which section to update (ledger|state_flags|open_threads|for_next)
+        content: The content to write (meaning varies by section)
+        conv_name: Conversation name (ledger only)
+        conv_uuid: Conversation UUID (ledger only)
+        obs_count: Observations extracted (ledger only)
+        status: Ledger status: ok|empty|error|skipped (ledger only)
+    """
+    try:
+        import sys as _sys, os as _os
+        daemon_path = _os.environ.get("SOMNIA_APP_DIR", "/app") + "/daemon"
+        if daemon_path not in _sys.path:
+            _sys.path.insert(0, daemon_path)
+
+        if section == "ledger":
+            from sticky_notes import append_ledger_entry
+            append_ledger_entry(conv_name, conv_uuid, obs_count, status)
+            short = conv_uuid[:8] if conv_uuid else "????????"
+            return f"Ledger entry added: {conv_name[:50]} [{short}] — {status}"
+
+        elif section == "state_flags":
+            from sticky_notes import update_state_flags
+            update_state_flags(harvest_status=content)
+            return "State flags updated"
+
+        elif section == "open_threads":
+            from sticky_notes import update_open_threads
+            update_open_threads(content)
+            return "Open threads updated"
+
+        elif section == "for_next":
+            from sticky_notes import update_for_next_claude
+            update_for_next_claude(content)
+            return "For-next-Claude note added"
+
+        else:
+            return f"Unknown section: {section}. Use: ledger, state_flags, open_threads, for_next"
+
+    except Exception as e:
+        return f"Sticky notes update failed: {e}"
+
+
 # =============================================================================
 # MAIN
 # =============================================================================
