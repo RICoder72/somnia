@@ -98,6 +98,12 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ Supernote service unavailable: {e}")
 
+try:
+    from services.notifications.tools import register as register_notifications
+    register_notifications(mcp)
+except Exception as e:
+    logger.warning(f"⚠️ Notification service unavailable: {e}")
+
 # ── Additional tools (graceful) ─────────────────────────────────────────────
 
 try:

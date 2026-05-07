@@ -1,0 +1,31 @@
+{
+  "channels": {
+    "signal-matt": {
+      "adapter": "signal",
+      "credentials_ref": "",
+      "config": {
+        "api_url": "http://signal-api:8080",
+        "sender": "+1XXXXXXXXXX"
+      }
+    },
+    "email-matt": {
+      "adapter": "email",
+      "credentials_ref": "",
+      "config": {
+        "mail_account": "matt-personal",
+        "from_name": "Somnia Nuntius",
+        "subject_prefix": "[Somnia]"
+      }
+    }
+  },
+  "routing": {
+    "urgent": ["signal", "email"],
+    "high":   ["signal", "email"],
+    "normal": ["email", "signal"],
+    "low":    ["email"]
+  },
+  "default_recipient": {
+    "address": "+1XXXXXXXXXX",
+    "name": "Matt"
+  }
+}
