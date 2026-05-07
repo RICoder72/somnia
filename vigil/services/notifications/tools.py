@@ -9,6 +9,7 @@ from .manager import NotificationManager
 from .interface import Priority
 from .adapters.signal import SignalAdapter
 from .adapters.email import EmailNotifyAdapter
+from .adapters.twilio import TwilioAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ def register(mcp) -> None:
         notification_manager = NotificationManager()
         notification_manager.register_adapter_type("signal", SignalAdapter)
         notification_manager.register_adapter_type("email", EmailNotifyAdapter)
+        notification_manager.register_adapter_type("twilio", TwilioAdapter)
         logger.info("✅ Notification service initialized")
     except Exception as e:
         logger.error(f"❌ Notification service failed to initialize: {e}")
