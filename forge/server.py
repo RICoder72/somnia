@@ -1,5 +1,5 @@
 """
-Forge MCP — Somnia Workbench
+Forge MCP — Constellation Workbench
 
 Minimal MCP that gives Claude shell access to a rich toolchain:
 Python/GIS/Node environment with persistent workspace and shared outputs.
@@ -16,8 +16,6 @@ Tools:
 from fastmcp import FastMCP
 import subprocess
 from pathlib import Path
-from starlette.requests import Request
-from starlette.responses import JSONResponse
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 WORKSPACE   = Path("/workspace")   # persistent scratch; survives restarts
@@ -25,7 +23,7 @@ OUTPUTS_DIR = Path("/outputs")     # shared with Vigil for publish
 REPOS_DIR   = Path("/repos")       # NAS repos mount
 ALLOWED_ROOTS = [WORKSPACE, OUTPUTS_DIR, REPOS_DIR, Path("/tmp")]
 
-mcp = FastMCP("Somnia Forge")
+mcp = FastMCP("Constellation Forge")
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -217,34 +215,35 @@ def env_info() -> str:
     return "\n\n".join(sections)
 
 
+
+# ── Nuntii Bootstrap ───────────────────────────────────────────────────────
+import os, shutil
+_nuntii_dir = Path('/workspace/nuntii')
+_crontab = _nuntii_dir / 'crontab'
+_agents_src = _nuntii_dir / 'agents'
+_mcp_src = _nuntii_dir / 'mcp.json'
+_claude_dir = Path.home() / '.claude'
+
+# Restore agent definitions from persistent storage
+if _agents_src.is_dir():
+    _agents_dst = _claude_dir / 'agents'
+    _agents_dst.mkdir(parents=True, exist_ok=True)
+    for md in _agents_src.glob('*.md'):
+        shutil.copy2(md, _agents_dst / md.name)
+    print(f'📋 Nuntii agents restored: {", ".join(f.stem for f in _agents_src.glob("*.md"))}')
+
+# Restore MCP config
+if _mcp_src.exists():
+    _claude_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_mcp_src, _claude_dir / '.mcp.json')
+    print('🔌 MCP config restored')
+
+# Start cron scheduler
+if _crontab.exists():
+    os.system(f'crontab {_crontab} && /usr/sbin/cron')
+    print('🕐 Nuntii cron schedule loaded')
+
 # ── Entry point ────────────────────────────────────────────────────────────
-
-@mcp.custom_route("/forge/internal/run", methods=["POST"])
-async def internal_run(request: Request) -> JSONResponse:
-    """Internal REST endpoint for Vigil's publish_md_as_pdf bridge.
-
-    Accepts: {"command": "...", "workdir": "/workspace", "timeout": 120}
-    Returns: {"output": "...", "ok": bool}
-
-    Not exposed through the router — only reachable on mcp-net.
-    No auth: caller must be on mcp-net (Vigil is the only caller).
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"ok": False, "output": "invalid JSON body"}, status_code=400)
-
-    command  = body.get("command", "")
-    workdir  = body.get("workdir", "/workspace")
-    timeout  = int(body.get("timeout", 120))
-
-    if not command:
-        return JSONResponse({"ok": False, "output": "no command"}, status_code=400)
-
-    output = _run(command, cwd=workdir, timeout=timeout)
-    ok = not output.startswith("[exit") and not output.startswith("[timeout") and not output.startswith("[error")
-    return JSONResponse({"output": output, "ok": ok})
-
 
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=8003, path="/forge")

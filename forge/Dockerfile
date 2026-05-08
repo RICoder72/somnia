@@ -21,9 +21,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pandoc \
     # Image tools
     libpng-dev libjpeg-dev \
+    # Scheduling (Nuntii cron dispatch)
+    cron \
     # Misc runtime
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# ── Claude Code (Nuntii agent runtime) ─────────────────────────────────
+RUN npm install -g @anthropic-ai/claude-code
 
 # ── Python dependencies ────────────────────────────────────────────────────
 RUN pip install --no-cache-dir uv
