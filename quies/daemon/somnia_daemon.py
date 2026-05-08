@@ -1334,6 +1334,16 @@ AGENT_TIMEOUT = {
 AGENT_TOOL_ALLOWLIST = "mcp__somnia__*,mcp__vigil__*,mcp__fabrica__*,WebSearch,WebFetch,Read,Write,Bash"
 
 
+def _mode_to_budget_key(mode: str) -> str:
+    """Map dream mode to config.yaml budget key suffix."""
+    return {
+        'process': 'dream',
+        'ruminate': 'rumination',
+        'solo_work': 'solo_work',
+        'archaeologize': 'archaeology',
+    }.get(mode, 'dream')
+
+
 def _dispatch_quies_agent(mode: str, dream_id: str, budget_usd: float = None):
     """Dispatch a Quies sleep agent via Claude Code headless.
 
@@ -1361,7 +1371,7 @@ def _dispatch_quies_agent(mode: str, dream_id: str, budget_usd: float = None):
     dispatch_params = {
         "dream_id": dream_id,
         "mode": mode,
-        "budget_usd": budget_usd or cfg(f'budget.max_cost_{mode.replace("archaeologize", "archaeology")}'),
+        "budget_usd": budget_usd or cfg(f'budget.max_cost_{_mode_to_budget_key(mode)}'),
         "graph_stats": {
             "node_count": graph_stats['node_count'],
             "edge_count": graph_stats['edge_count'],
