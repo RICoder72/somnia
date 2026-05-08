@@ -29,6 +29,16 @@ fi
 
 # Everything below runs as somnia user
 
+# ── Bootstrap Claude Code agents and MCP config ────────────────────────
+AGENTS_SRC="/app/agents"
+CLAUDE_DIR="${HOME}/.claude"
+if [ -d "$AGENTS_SRC" ]; then
+    mkdir -p "${CLAUDE_DIR}/agents"
+    cp ${AGENTS_SRC}/*.md "${CLAUDE_DIR}/agents/" 2>/dev/null
+    [ -f "${AGENTS_SRC}/mcp.json" ] && cp "${AGENTS_SRC}/mcp.json" "${CLAUDE_DIR}/.mcp.json"
+    echo "  Quies agents installed: $(ls ${CLAUDE_DIR}/agents/*.md 2>/dev/null | wc -l) agents"
+fi
+
 # Start the Flask API in the background
 python daemon/somnia_daemon.py &
 API_PID=$!

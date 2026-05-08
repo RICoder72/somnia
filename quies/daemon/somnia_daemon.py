@@ -1309,317 +1309,325 @@ def _calculate_cost(usage: dict, model: str) -> float:
         return 0.0
 
 
+# ── Agent dispatch configuration ────────────────────────────────────────
+AGENT_MAP = {
+    'process':      'quies-consolidator',
+    'ruminate':     'quies-ruminator',
+    'solo_work':    'quies-explorer',
+    'archaeologize':'quies-archaeologist',
+}
+
+AGENT_MAX_TURNS = {
+    'process':       25,
+    'ruminate':      20,
+    'solo_work':     30,
+    'archaeologize': 15,
+}
+
+AGENT_TIMEOUT = {
+    'process':       300,   # 5 min
+    'ruminate':      600,   # 10 min
+    'solo_work':     900,   # 15 min
+    'archaeologize': 300,   # 5 min
+}
+
+AGENT_TOOL_ALLOWLIST = "mcp__somnia__*,mcp__vigil__*,mcp__fabrica__*,WebSearch,WebFetch,Read,Write,Bash"
+
+
+def _dispatch_quies_agent(mode: str, dream_id: str, budget_usd: float = None):
+    """Dispatch a Quies sleep agent via Claude Code headless.
+
+    Returns:
+        {
+            "exit_code": int,
+            "cost_usd": float,
+            "input_tokens": int,
+            "output_tokens": int,
+            "result_text": str,   # agent's summary text
+            "duration_seconds": int,
+            "error": str or None,
+        }
+    """
+    agent_name = AGENT_MAP.get(mode)
+    if not agent_name:
+        return {"error": f"Unknown mode: {mode}"}
+
+    max_turns = AGENT_MAX_TURNS.get(mode, 20)
+    timeout = AGENT_TIMEOUT.get(mode, 600)
+    graph_stats = get_graph_stats()
+
+    # Build dispatch params — the agent reads its own context via MCP,
+    # but we pass high-level params so it knows the operational context.
+    dispatch_params = {
+        "dream_id": dream_id,
+        "mode": mode,
+        "budget_usd": budget_usd or cfg(f'budget.max_cost_{mode.replace("archaeologize", "archaeology")}'),
+        "graph_stats": {
+            "node_count": graph_stats['node_count'],
+            "edge_count": graph_stats['edge_count'],
+            "inbox_pending": graph_stats['inbox_pending'],
+            "avg_decay": round(graph_stats['avg_decay'], 3),
+            "pinned_count": graph_stats['pinned_count'],
+        }
+    }
+
+    prompt = json.dumps(dispatch_params)
+
+    # Determine auth via existing credential chain
+    env = os.environ.copy()
+    auth_type, auth_value = get_claude_auth()
+    if auth_type == 'oauth':
+        env['CLAUDE_CODE_OAUTH_TOKEN'] = auth_value
+    elif auth_type == 'api_key':
+        env['ANTHROPIC_API_KEY'] = auth_value
+    else:
+        return {"error": "No authentication configured (need OAuth token or API key)"}
+
+    cmd = [
+        "claude", "--agent", agent_name, "-p",
+        "--allowedTools", AGENT_TOOL_ALLOWLIST,
+        "--max-turns", str(max_turns),
+        "--output-format", "json",
+    ]
+
+    started = datetime.now()
+    try:
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+            cwd="/workspace",
+        )
+
+        duration = int((datetime.now() - started).total_seconds())
+
+        if result.returncode != 0 and not result.stdout:
+            stderr_preview = (result.stderr or "")[:500]
+            return {
+                "error": f"Agent exited {result.returncode}: {stderr_preview}",
+                "exit_code": result.returncode,
+                "duration_seconds": duration,
+                "cost_usd": 0.0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "result_text": "",
+            }
+
+        # Parse JSON output from claude -p
+        output = json.loads(result.stdout) if result.stdout.strip() else {}
+        cost = output.get('total_cost_usd', 0.0)
+
+        # Extract token usage
+        model_usage = output.get('modelUsage', {})
+        input_tokens = output_tokens = 0
+        if model_usage:
+            for model_data in model_usage.values():
+                input_tokens += (model_data.get('inputTokens', 0)
+                               + model_data.get('cacheReadInputTokens', 0)
+                               + model_data.get('cacheCreationInputTokens', 0))
+                output_tokens += model_data.get('outputTokens', 0)
+
+        # Extract the text result (agent's summary)
+        result_text = output.get('result', '')
+
+        return {
+            "exit_code": result.returncode,
+            "cost_usd": cost,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "result_text": result_text,
+            "duration_seconds": duration,
+            "error": None,
+        }
+
+    except subprocess.TimeoutExpired:
+        duration = int((datetime.now() - started).total_seconds())
+        return {
+            "error": f"Agent timed out after {timeout}s",
+            "exit_code": -1,
+            "duration_seconds": duration,
+            "cost_usd": 0.0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "result_text": "",
+        }
+    except json.JSONDecodeError as e:
+        duration = int((datetime.now() - started).total_seconds())
+        return {
+            "error": f"Failed to parse agent output: {e}",
+            "exit_code": 0,
+            "duration_seconds": duration,
+            "cost_usd": 0.0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "result_text": result.stdout[:1000] if result.stdout else "",
+        }
+    except Exception as e:
+        duration = int((datetime.now() - started).total_seconds())
+        return {
+            "error": str(e),
+            "exit_code": -1,
+            "duration_seconds": duration,
+            "cost_usd": 0.0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "result_text": "",
+        }
+
+
 def run_consolidation(dry_run=False, mode='process', budget_override=None):
-    """Run a consolidation cycle via the Anthropic Python SDK."""
+    """Run a dream cycle by dispatching a Quies agent via Claude Code.
+
+    The agent reads its own context via MCP, applies graph operations
+    through the gated somnia_apply_operations tool, and returns a
+    summary report. This function handles dispatch, logging, and
+    post-processing (dream_log, diagnostics, sticky notes, portal).
+    """
     dream_id = str(uuid.uuid4())
     started_at = datetime.now().isoformat()
     graph_stats_before = get_graph_stats()
 
-    if mode == 'ruminate':
-        full_prompt = _build_rumination_prompt(graph_stats_before)
-    elif mode == 'solo_work':
-        full_prompt = _build_solo_work_prompt(graph_stats_before)
-    else:
-        inbox_items = get_inbox_items()
-        full_prompt = _build_processing_prompt(graph_stats_before, inbox_items)
-
     if dry_run:
         return {
             "dream_id": dream_id, "dry_run": True, "mode": mode,
-            "prompt_preview": full_prompt[:500] + "...",
-            "full_prompt": full_prompt,
-            "graph_stats": graph_stats_before
+            "agent": AGENT_MAP.get(mode, 'unknown'),
+            "graph_stats": graph_stats_before,
         }
 
-    api_key = get_api_key()
-    if not api_key:
-        return {"error": "No authentication configured."}
+    # ── Dispatch agent ──────────────────────────────────────────────────
+    log_event('info', mode.replace('process', 'dream'),
+              f'Dispatching agent: {AGENT_MAP.get(mode)}',
+              {'dream_id': dream_id, 'mode': mode},
+              dream_id=dream_id)
 
-    model = cfg('api.model')
-    max_tokens = _get_max_tokens_for_mode(mode)
-    # Note: budget_override is intentionally NOT used here to fudge max_tokens.
-    # The previous implementation translated USD → output token cap, which
-    # (a) ignored input cost — the dominant cost for inbox processing — and
-    # (b) saturated at ~$0.96 due to a 64k hard cap. Real spend gating now
-    # happens in run_dream_session(), which loops this function and tracks
-    # accumulated cost from actual usage. budget_override is accepted here
-    # only for backward-compatible API signatures and is otherwise ignored.
+    agent_result = _dispatch_quies_agent(mode, dream_id, budget_override)
 
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": full_prompt}],
-        )
+    ended_at = datetime.now().isoformat()
+    duration_seconds = agent_result.get('duration_seconds', 0)
+    cost_usd = agent_result.get('cost_usd', 0.0)
+    summary = agent_result.get('result_text', '')[:2000]
 
-        ended_at = datetime.now().isoformat()
-        duration_seconds = (datetime.fromisoformat(ended_at) -
-                            datetime.fromisoformat(started_at)).seconds
-
-        result_text = response.content[0].text if response.content else ""
-        output = {
-            "result": result_text,
-            "usage": {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-            },
-            "subtype": "error_max_tokens" if response.stop_reason == "max_tokens" else "",
-            "num_turns": 1,
-            "stop_reason": response.stop_reason,
-        }
-
-        # Log cost for budget tracking
-        cost_usd = _calculate_cost(output["usage"], model)
-        # Stash cost in output dict so log_diagnostics() can pick it up via
-        # its existing total_cost_usd lookup path. This was the missing piece
-        # after the Claude Code CLI → SDK migration: the CLI used to emit
-        # total_cost_usd at the top level of its JSON output; the SDK does not.
-        output["total_cost_usd"] = cost_usd
-        log_event('info', mode.replace('process', 'dream'),
-                  f'SDK call complete: {response.stop_reason}',
-                  {'input_tokens': response.usage.input_tokens,
-                   'output_tokens': response.usage.output_tokens,
-                   'cost_usd': round(cost_usd, 6),
-                   'stop_reason': response.stop_reason},
-                  dream_id=dream_id)
-
-        dream_ops = extract_json_from_output(output)
-
-        # Diagnostic dump when extraction fails
-        if not dream_ops:
-            diag_dir = DATA_DIR / "diagnostics"
-            diag_dir.mkdir(parents=True, exist_ok=True)
-            diag_path = diag_dir / f"raw-output-{dream_id[:8]}.json"
-            try:
-                with open(diag_path, 'w') as f:
-                    json.dump(output, f, indent=2, default=str)
-                logger.info(f"Wrote diagnostic dump: {diag_path}")
-            except Exception as e:
-                logger.warning(f"Could not write diagnostic dump: {e}")
-
-        if mode == 'archaeologize':
-            # Archaeology produces STM observations for resurfaced SLTM nodes
-            if dream_ops and 'resurfaced' in dream_ops:
-                arch_results = _apply_archaeology_results(dream_ops, dream_id)
-                summary = dream_ops.get('summary', '')
-                reflections = dream_ops.get('notes', '')
-                op_results = {
-                    "nodes_created": arch_results['stm_nodes_created'],
-                    "edges_created": [],
-                    "edges_reinforced": [],
-                    "inbox_processed": [],
-                    "resurfaced_count": arch_results['resurfaced_count'],
-                    "pin_candidates": arch_results['pin_candidates'],
-                    "errors": arch_results['errors']
-                }
-            else:
-                log_event('warning', 'archaeology', 'No parseable results JSON in output',
-                          dream_id=dream_id)
-                op_results = {
-                    "nodes_created": [], "edges_created": [],
-                    "edges_reinforced": [], "inbox_processed": [],
-                    "resurfaced_count": 0, "errors": ["No parseable results JSON"]
-                }
-                summary = ''
-                reflections = ''
-
-        elif mode == 'solo_work':
-            # Solo-work produces findings, not graph operations
-            if dream_ops and 'findings' in dream_ops:
-                solo_results = _apply_solo_work_results(dream_ops, dream_id)
-                summary = dream_ops.get('summary', '')
-                reflections = json.dumps(dream_ops.get('meta', {}))
-                op_results = {
-                    "nodes_created": solo_results['stm_nodes_created'],
-                    "edges_created": [],
-                    "edges_reinforced": [],
-                    "inbox_processed": [],
-                    "findings_count": solo_results['findings_count'],
-                    "findings_path": solo_results['findings_path'],
-                    "errors": solo_results['errors']
-                }
-            else:
-                # No findings parsed — attempt recovery if we hit max_turns
-                subtype = output.get('subtype', '')
-                recovered = False
-                if subtype == 'error_max_turns':
-                    logger.warning("Solo-work hit max_turns without findings — attempting recovery call")
-                    log_event('warning', 'solo_work', 'Hit max_turns without findings, attempting recovery',
-                              {'subtype': subtype, 'num_turns': output.get('num_turns')},
-                              dream_id=dream_id)
-                    recovery_ops = _solo_work_recovery_call(output, dream_id)
-                    if recovery_ops and 'findings' in recovery_ops:
-                        logger.info(f"Solo-work recovery succeeded: {len(recovery_ops['findings'])} findings")
-                        log_event('info', 'recovery', 'Solo-work recovery succeeded',
-                                  {'findings_count': len(recovery_ops['findings'])},
-                                  dream_id=dream_id)
-                        solo_results = _apply_solo_work_results(recovery_ops, dream_id)
-                        summary = recovery_ops.get('summary', '(recovered from max_turns)')
-                        reflections = json.dumps(recovery_ops.get('meta', {}))
-                        op_results = {
-                            "nodes_created": solo_results['stm_nodes_created'],
-                            "edges_created": [],
-                            "edges_reinforced": [],
-                            "inbox_processed": [],
-                            "findings_count": solo_results['findings_count'],
-                            "findings_path": solo_results['findings_path'],
-                            "errors": solo_results['errors']
-                        }
-                        recovered = True
-                    else:
-                        logger.error("Solo-work recovery failed — no parseable findings")
-                        log_event('error', 'recovery', 'Solo-work recovery failed — no parseable findings',
-                                  dream_id=dream_id)
-
-                if not recovered:
-                    log_event('error', 'solo_work', 'No parseable findings JSON in output',
-                              {'subtype': subtype,
-                               'num_turns': output.get('num_turns'),
-                               'output_tokens': output.get('usage', {}).get('output_tokens', 0)},
-                              dream_id=dream_id)
-                    op_results = {
-                        "nodes_created": [], "edges_created": [],
-                        "edges_reinforced": [], "inbox_processed": [],
-                        "findings_count": 0,
-                        "errors": [f"No parseable findings JSON found in output (subtype={subtype})"]
-                    }
-                    summary = output.get('result', output.get('raw', ''))[:1000]
-                    reflections = ''
-
-        elif dream_ops:
-            op_results = apply_dream_operations(dream_ops)
-            summary = dream_ops.get('summary', '')
-            reflections = dream_ops.get('reflections', '')
-            # Save continuity note for next rumination instance
-            if mode == 'ruminate' and dream_ops.get('continuity_note'):
-                write_continuity_note(dream_ops['continuity_note'])
-        else:
-            subtype = output.get('subtype', 'unknown')
-            result_text = output.get('result', '')
-            output_tokens = output.get('usage', {}).get('output_tokens', 0)
-            logger.warning(
-                f"[{mode}] No parseable JSON — subtype={subtype}, "
-                f"result_len={len(result_text)}, output_tokens={output_tokens}")
-            # Log a snippet of the raw output for debugging
-            raw_preview = (result_text or str(output))[:500]
-            logger.warning(f"[{mode}] Raw output preview: {raw_preview}")
-            log_event('warning', mode.replace('process', 'dream').replace('ruminate', 'rumination'),
-                      'No parseable operations JSON in output',
-                      {'subtype': subtype, 'output_tokens': output_tokens,
-                       'result_len': len(result_text),
-                       'raw_preview': raw_preview[:300]},
-                      dream_id=dream_id)
-            op_results = {
-                "nodes_created": [], "edges_created": [],
-                "edges_reinforced": [], "inbox_processed": [],
-                "errors": [f"No parseable operations JSON found in output (subtype={subtype}, output_tokens={output_tokens})"]
-            }
-            summary = result_text[:1000] if result_text else ''
-            reflections = ''
-
-        graph_stats_after = get_graph_stats()
-
-        execute("""
-            INSERT INTO dream_log (
-                id, started_at, ended_at, interrupted,
-                summary, reflections,
-                nodes_created, edges_created, edges_reinforced
-            ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s)
-        """, (dream_id, started_at, ended_at,
-              f"[{mode}] {summary}", reflections,
-              json.dumps(op_results['nodes_created']),
-              json.dumps(op_results['edges_created']),
-              json.dumps(op_results['edges_reinforced'])))
-
-        activity_type = {'ruminate': 'rumination', 'solo_work': 'solo_work'}.get(mode, 'dream')
-        record_activity(activity_type, {
-            "dream_id": dream_id,
-            "nodes_created": len(op_results['nodes_created']),
-            "edges_created": len(op_results['edges_created']),
-            "duration_seconds": duration_seconds
-        })
-
-        log_diagnostics(dream_id, graph_stats_before,
-                        graph_stats_after=graph_stats_after,
-                        cli_output=output, exit_code=0,
-                        duration_ms=duration_seconds * 1000,
-                        op_results=op_results)
-
-        # Refresh portal manifest after every successful dream cycle
-        _refresh_portal_manifest(dream_id=dream_id)
-
-        # Update sticky notes with what this dream cycle did
-        try:
-            import sys as _sys
-            _daemon_path = str(APP_DIR / "daemon")
-            if _daemon_path not in _sys.path:
-                _sys.path.insert(0, _daemon_path)
-            from sticky_notes import (
-                update_dream_focus, update_open_threads,
-                update_for_next_claude
-            )
-            update_dream_focus(mode, summary[:400] if summary else "(no summary)")
-
-            # Rumination: pass continuity note as handoff context
-            if mode == 'ruminate' and dream_ops and dream_ops.get('continuity_note'):
-                update_for_next_claude(dream_ops['continuity_note'])
-
-            # Solo-work: pass threads as open threads, summary as handoff
-            if mode == 'solo_work' and dream_ops:
-                if dream_ops.get('threads'):
-                    update_open_threads(dream_ops['threads'])
-                if summary:
-                    nodes_ct = len(op_results.get('nodes_created', []))
-                    update_for_next_claude(
-                        f"[solo_work] {nodes_ct} nodes created. {summary[:200]}"
-                    )
-        except Exception as _sne:
-            logger.debug(f"sticky_notes update skipped: {_sne}")
-
-        return {
-            "dream_id": dream_id, "mode": mode,
-            "started_at": started_at, "ended_at": ended_at,
-            "duration_seconds": duration_seconds,
-            "operations": {
-                "nodes_created": len(op_results['nodes_created']),
-                "edges_created": len(op_results['edges_created']),
-                "edges_reinforced": len(op_results['edges_reinforced']),
-                "inbox_processed": len(op_results['inbox_processed']),
-                "errors": op_results['errors']
-            },
-            "graph_before": graph_stats_before,
-            "graph_after": graph_stats_after,
-            "usage": {
-                "input_tokens": output["usage"]["input_tokens"],
-                "output_tokens": output["usage"]["output_tokens"],
-            },
-            "cost_usd": cost_usd,
-            "summary": summary, "reflections": reflections
-        }
-
-    except anthropic.APITimeoutError:
-        ended_at = datetime.now().isoformat()
+    # ── Handle errors ───────────────────────────────────────────────────
+    if agent_result.get('error'):
+        error_msg = agent_result['error']
         execute("""
             INSERT INTO dream_log (id, started_at, ended_at, interrupted, summary)
             VALUES (%s, %s, %s, TRUE, %s)
         """, (dream_id, started_at, ended_at,
-              f'[{mode}] SDK timeout'))
+              f'[{mode}] Agent error: {error_msg[:500]}'))
+
         log_event('error', mode.replace('process', 'dream'),
-                  f'{mode} timed out (SDK)',
-                  {'mode': mode},
+                  f'Agent dispatch failed: {error_msg}',
+                  {'exit_code': agent_result.get('exit_code'),
+                   'duration_seconds': duration_seconds},
                   dream_id=dream_id)
-        return {"dream_id": dream_id, "error": "Timed out", "interrupted": True}
-    except anthropic.APIError as e:
-        log_event('error', mode.replace('process', 'dream'),
-                  f'Anthropic API error in {mode}: {e}',
-                  {'exception_type': type(e).__name__}, dream_id=dream_id)
-        return {"dream_id": dream_id, "error": f"API error: {e}"}
-    except Exception as e:
-        log_event('error', mode.replace('process', 'dream'),
-                  f'Unhandled exception in {mode}: {e}',
-                  {'exception_type': type(e).__name__}, dream_id=dream_id)
-        return {"dream_id": dream_id, "error": str(e)}
+
+        return {
+            "dream_id": dream_id, "error": error_msg,
+            "cost_usd": cost_usd,
+            "duration_seconds": duration_seconds,
+        }
+
+    # ── Compute graph diff ──────────────────────────────────────────────
+    # Agent applied its own operations via MCP; we infer counts from the diff
+    graph_stats_after = get_graph_stats()
+    nodes_delta = graph_stats_after['node_count'] - graph_stats_before['node_count']
+    edges_delta = graph_stats_after['edge_count'] - graph_stats_before['edge_count']
+    inbox_delta = graph_stats_before['inbox_pending'] - graph_stats_after['inbox_pending']
+
+    op_results = {
+        "nodes_created": max(0, nodes_delta),
+        "edges_created": max(0, edges_delta),
+        "edges_reinforced": 0,  # can't infer from stats alone
+        "inbox_processed": max(0, inbox_delta),
+        "errors": [],
+    }
+
+    # ── Log dream ───────────────────────────────────────────────────────
+    execute("""
+        INSERT INTO dream_log (
+            id, started_at, ended_at, interrupted,
+            summary, reflections,
+            nodes_created, edges_created, edges_reinforced
+        ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s)
+    """, (dream_id, started_at, ended_at,
+          f"[{mode}] {summary[:500]}", '',
+          json.dumps(list(range(op_results['nodes_created']))),  # placeholder IDs
+          json.dumps(list(range(op_results['edges_created']))),
+          json.dumps([])))
+
+    activity_type = {'ruminate': 'rumination', 'solo_work': 'solo_work',
+                     'archaeologize': 'archaeology'}.get(mode, 'dream')
+    record_activity(activity_type, {
+        "dream_id": dream_id,
+        "nodes_created": op_results['nodes_created'],
+        "edges_created": op_results['edges_created'],
+        "duration_seconds": duration_seconds,
+        "cost_usd": cost_usd,
+    })
+
+    # ── Diagnostics ─────────────────────────────────────────────────────
+    output_for_diag = {
+        "total_cost_usd": cost_usd,
+        "usage": {
+            "input_tokens": agent_result.get('input_tokens', 0),
+            "output_tokens": agent_result.get('output_tokens', 0),
+        }
+    }
+    log_diagnostics(dream_id, graph_stats_before,
+                    graph_stats_after=graph_stats_after,
+                    cli_output=output_for_diag, exit_code=agent_result.get('exit_code', 0),
+                    duration_ms=duration_seconds * 1000,
+                    op_results=op_results)
+
+    # ── Sticky notes ────────────────────────────────────────────────────
+    try:
+        import sys as _sys
+        _daemon_path = str(APP_DIR / "daemon")
+        if _daemon_path not in _sys.path:
+            _sys.path.insert(0, _daemon_path)
+        from sticky_notes import update_dream_focus, update_for_next_claude
+
+        update_dream_focus(mode, summary[:400] if summary else "(no summary)")
+
+        if mode in ('solo_work', 'ruminate') and summary:
+            nodes_ct = op_results['nodes_created']
+            update_for_next_claude(
+                f"[{mode}] {nodes_ct} nodes created. {summary[:200]}"
+            )
+    except Exception as _sne:
+        logger.debug(f"sticky_notes update skipped: {_sne}")
+
+    # ── Portal ──────────────────────────────────────────────────────────
+    _refresh_portal_manifest(dream_id=dream_id)
+
+    # ── Log completion ──────────────────────────────────────────────────
+    log_event('info', mode.replace('process', 'dream'),
+              f'Agent cycle complete: +{op_results["nodes_created"]} nodes, '
+              f'+{op_results["edges_created"]} edges, ${cost_usd:.4f}',
+              {'duration_seconds': duration_seconds, 'cost_usd': cost_usd,
+               'nodes_created': op_results['nodes_created'],
+               'edges_created': op_results['edges_created']},
+              dream_id=dream_id)
+
+    return {
+        "dream_id": dream_id, "mode": mode,
+        "started_at": started_at, "ended_at": ended_at,
+        "duration_seconds": duration_seconds,
+        "operations": op_results,
+        "graph_before": graph_stats_before,
+        "graph_after": graph_stats_after,
+        "usage": {
+            "input_tokens": agent_result.get('input_tokens', 0),
+            "output_tokens": agent_result.get('output_tokens', 0),
+        },
+        "cost_usd": cost_usd,
+        "summary": summary,
+    }
+
 
 
 def run_dream_session(

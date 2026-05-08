@@ -1,0 +1,14 @@
+{
+  "vigil": {
+    "type": "http",
+    "url": "http://vigil:8000/vigil"
+  },
+  "somnia": {
+    "type": "http",
+    "url": "http://quies:8011/somnia"
+  },
+  "fabrica": {
+    "type": "http",
+    "url": "http://fabrica:8001/fabrica"
+  }
+}
