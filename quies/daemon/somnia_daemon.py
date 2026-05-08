@@ -1409,7 +1409,7 @@ def _dispatch_quies_agent(mode: str, dream_id: str, budget_usd: float = None):
             text=True,
             timeout=timeout,
             env=env,
-            cwd="/workspace",
+            cwd="/tmp",
         )
 
         duration = int((datetime.now() - started).total_seconds())
@@ -1549,14 +1549,18 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
     inbox_delta = graph_stats_before['inbox_pending'] - graph_stats_after['inbox_pending']
 
     op_results = {
-        "nodes_created": max(0, nodes_delta),
-        "edges_created": max(0, edges_delta),
-        "edges_reinforced": 0,  # can't infer from stats alone
-        "inbox_processed": max(0, inbox_delta),
+        "nodes_created": ['_'] * max(0, nodes_delta),
+        "edges_created": ['_'] * max(0, edges_delta),
+        "edges_reinforced": [],
+        "inbox_processed": ['_'] * max(0, inbox_delta),
         "errors": [],
     }
 
     # ── Log dream ───────────────────────────────────────────────────────
+    nodes_ct = len(op_results['nodes_created'])
+    edges_ct = len(op_results['edges_created'])
+    inbox_ct = len(op_results['inbox_processed'])
+
     execute("""
         INSERT INTO dream_log (
             id, started_at, ended_at, interrupted,
@@ -1565,16 +1569,16 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
         ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s)
     """, (dream_id, started_at, ended_at,
           f"[{mode}] {summary[:500]}", '',
-          json.dumps(list(range(op_results['nodes_created']))),  # placeholder IDs
-          json.dumps(list(range(op_results['edges_created']))),
+          json.dumps(list(range(nodes_ct))),
+          json.dumps(list(range(edges_ct))),
           json.dumps([])))
 
     activity_type = {'ruminate': 'rumination', 'solo_work': 'solo_work',
                      'archaeologize': 'archaeology'}.get(mode, 'dream')
     record_activity(activity_type, {
         "dream_id": dream_id,
-        "nodes_created": op_results['nodes_created'],
-        "edges_created": op_results['edges_created'],
+        "nodes_created": nodes_ct,
+        "edges_created": edges_ct,
         "duration_seconds": duration_seconds,
         "cost_usd": cost_usd,
     })
@@ -1604,7 +1608,6 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
         update_dream_focus(mode, summary[:400] if summary else "(no summary)")
 
         if mode in ('solo_work', 'ruminate') and summary:
-            nodes_ct = op_results['nodes_created']
             update_for_next_claude(
                 f"[{mode}] {nodes_ct} nodes created. {summary[:200]}"
             )
@@ -1616,18 +1619,24 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
 
     # ── Log completion ──────────────────────────────────────────────────
     log_event('info', mode.replace('process', 'dream'),
-              f'Agent cycle complete: +{op_results["nodes_created"]} nodes, '
-              f'+{op_results["edges_created"]} edges, ${cost_usd:.4f}',
+              f'Agent cycle complete: +{nodes_ct} nodes, '
+              f'+{edges_ct} edges, ${cost_usd:.4f}',
               {'duration_seconds': duration_seconds, 'cost_usd': cost_usd,
-               'nodes_created': op_results['nodes_created'],
-               'edges_created': op_results['edges_created']},
+               'nodes_created': nodes_ct,
+               'edges_created': edges_ct},
               dream_id=dream_id)
 
     return {
         "dream_id": dream_id, "mode": mode,
         "started_at": started_at, "ended_at": ended_at,
         "duration_seconds": duration_seconds,
-        "operations": op_results,
+        "operations": {
+            "nodes_created": nodes_ct,
+            "edges_created": edges_ct,
+            "edges_reinforced": 0,
+            "inbox_processed": inbox_ct,
+            "errors": [],
+        },
         "graph_before": graph_stats_before,
         "graph_after": graph_stats_after,
         "usage": {
