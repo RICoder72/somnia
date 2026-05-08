@@ -3945,6 +3945,175 @@ document.getElementById('content').innerHTML = marked.parse(md);
 </html>"""
 
 
+# ============================================================================
+# AGENT API — endpoints for Quies agent self-service via MCP
+# ============================================================================
+
+@app.route("/inbox/grouped", methods=["GET"])
+def inbox_grouped():
+    """Return inbox items grouped by conversation cluster.
+
+    Query params:
+        limit:  max items to return (default 50)
+    """
+    limit = request.args.get("limit", 50, type=int)
+    items = get_inbox_items(batch_size=limit)
+    clusters = cluster_stm_by_conversation(items)
+    return jsonify({
+        "total_items": len(items),
+        "clusters": clusters
+    })
+
+
+@app.route("/graph/context", methods=["POST"])
+def graph_context():
+    """Return a subgraph neighborhood around seed nodes.
+
+    JSON body:
+        node_ids:  list of seed node IDs to expand from
+        depth:     expansion depth (default 2, max 3)
+        limit:     max nodes returned (default 50, max 100)
+        include_edges: whether to include edges (default true)
+    """
+    data = request.get_json(force=True) or {}
+    node_ids = data.get("node_ids", [])
+    depth = min(data.get("depth", 2), 3)
+    limit = min(data.get("limit", 50), 100)
+    include_edges = data.get("include_edges", True)
+
+    if not node_ids:
+        return jsonify({"error": "node_ids required"}), 400
+
+    # BFS expansion from seed nodes
+    visited = set()
+    frontier = set(node_ids)
+
+    for _ in range(depth):
+        if not frontier:
+            break
+        placeholders = ','.join(['%s'] * len(frontier))
+        # Get edges from frontier
+        rows = execute(
+            f"SELECT source_id, target_id FROM edges "
+            f"WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
+            list(frontier) + list(frontier), fetch='all') or []
+        visited.update(frontier)
+        next_frontier = set()
+        for row in rows:
+            if row['source_id'] not in visited:
+                next_frontier.add(row['source_id'])
+            if row['target_id'] not in visited:
+                next_frontier.add(row['target_id'])
+        frontier = next_frontier
+
+    all_ids = visited | frontier
+    if not all_ids:
+        return jsonify({"nodes": [], "edges": []})
+
+    # Fetch nodes (capped)
+    id_list = list(all_ids)[:limit]
+    placeholders = ','.join(['%s'] * len(id_list))
+    node_rows = execute(
+        f"SELECT id, type, content, decay_state, pinned, epistemic_status, "
+        f"memory_layer, metadata, last_accessed "
+        f"FROM nodes WHERE id IN ({placeholders})",
+        id_list, fetch='all') or []
+    nodes = _serialize_rows(node_rows)
+
+    edges = []
+    if include_edges and id_list:
+        edge_rows = execute(
+            f"SELECT id, source_id, target_id, type, weight "
+            f"FROM edges WHERE source_id IN ({placeholders}) "
+            f"AND target_id IN ({placeholders})",
+            id_list + id_list, fetch='all') or []
+        edges = _serialize_rows(edge_rows)
+
+    return jsonify({"nodes": nodes, "edges": edges})
+
+
+@app.route("/sltm/sample", methods=["GET"])
+def sltm_sample():
+    """Sample SLTM/faded nodes for archaeology triage.
+
+    Query params:
+        limit:     max nodes to return (default 20, max 50)
+        sort_by:   "edge_count" | "decay" | "age" (default "edge_count")
+        max_decay: only nodes below this decay (default 0.15)
+    """
+    limit = min(request.args.get("limit", 20, type=int), 50)
+    sort_by = request.args.get("sort_by", "edge_count")
+    max_decay = request.args.get("max_decay", 0.15, type=float)
+
+    sort_clause = {
+        "edge_count": "edge_count DESC",
+        "decay": "n.decay_state ASC",
+        "age": "n.last_accessed ASC NULLS FIRST"
+    }.get(sort_by, "edge_count DESC")
+
+    rows = execute(f"""
+        SELECT n.id, n.type, n.content, n.decay_state, n.memory_layer,
+               n.epistemic_status, n.last_accessed, n.metadata,
+               COUNT(e.id) as edge_count
+        FROM nodes n
+        LEFT JOIN edges e ON (e.source_id = n.id OR e.target_id = n.id)
+        WHERE n.decay_state < %s
+          AND n.pinned = FALSE
+        GROUP BY n.id
+        ORDER BY {sort_clause}
+        LIMIT %s
+    """, (max_decay, limit), fetch='all') or []
+
+    nodes = []
+    for row in rows:
+        node = _serialize_row(row)
+        # Add connected node summaries for context
+        connected = execute("""
+            SELECT DISTINCT n2.id, n2.type, LEFT(n2.content, 80) as summary
+            FROM edges e
+            JOIN nodes n2 ON (n2.id = CASE WHEN e.source_id = %s THEN e.target_id ELSE e.source_id END)
+            WHERE e.source_id = %s OR e.target_id = %s
+            LIMIT 5
+        """, (row['id'], row['id'], row['id']), fetch='all') or []
+        node['connected_nodes'] = _serialize_rows(connected)
+        nodes.append(node)
+
+    return jsonify({"count": len(nodes), "nodes": nodes})
+
+
+@app.route("/apply_operations", methods=["POST"])
+def apply_operations_endpoint():
+    """Apply graph operations via the gated write interface.
+
+    JSON body:
+        operations: list of operation dicts (same format as dream output)
+        dream_id:   optional dream ID for diagnostics linkage
+
+    Operations supported:
+        create_node, create_edge, reinforce_edge, mark_processed,
+        update_node (blocked on pinned), adjust_decay,
+        append_dream_note, suggest_pin, suggest_prune_edge
+    """
+    data = request.get_json(force=True) or {}
+    operations = data.get("operations", [])
+    dream_id = data.get("dream_id")
+
+    if not operations:
+        return jsonify({"error": "No operations provided"}), 400
+
+    try:
+        results = apply_dream_operations({"operations": operations})
+        if dream_id:
+            log_event('info', 'agent-ops',
+                      f'Agent applied {len(operations)} operations',
+                      {'dream_id': dream_id, 'results': results},
+                      dream_id=dream_id)
+        return jsonify({"ok": True, "results": results})
+    except Exception as e:
+        logger.error(f"apply_operations error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/logs", methods=["GET"])
 def system_logs():
     """Query the system event log with optional filters."""

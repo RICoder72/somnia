@@ -1146,6 +1146,129 @@ def somnia_sticky_notes(
 
 
 # =============================================================================
+# AGENT TOOLS — self-service for Quies sleep agents
+# =============================================================================
+
+@mcp.tool()
+def somnia_inbox(
+    limit: int = 50,
+    grouped: bool = True
+) -> str:
+    """Read pending inbox (STM) items awaiting consolidation.
+
+    Use this to see what observations are waiting to be processed
+    into the graph. Primarily used by the consolidator agent.
+
+    Args:
+        limit:   Max items to return (default 50)
+        grouped: If true, cluster items by conversation (default true)
+    """
+    try:
+        if grouped:
+            data = _api_get("/inbox/grouped", {"limit": limit})
+        else:
+            data = _api_get("/inbox", {"limit": limit})
+        return json.dumps(data, indent=2, default=str)
+    except Exception as e:
+        return f"Failed to read inbox: {e}"
+
+
+@mcp.tool()
+def somnia_graph_context(
+    node_ids: list[str],
+    depth: int = 2,
+    limit: int = 50,
+    include_edges: bool = True
+) -> str:
+    """Pull a subgraph neighborhood around seed nodes.
+
+    BFS expansion from the given node IDs, returning nodes and edges
+    within the specified depth. Use this to understand the local
+    graph structure around topics you're working with.
+
+    Args:
+        node_ids:      List of node IDs to expand from
+        depth:         Expansion depth (default 2, max 3)
+        limit:         Max nodes returned (default 50, max 100)
+        include_edges: Whether to include edges (default true)
+    """
+    try:
+        data = _api_post("/graph/context", {
+            "node_ids": node_ids,
+            "depth": depth,
+            "limit": limit,
+            "include_edges": include_edges
+        })
+        return json.dumps(data, indent=2, default=str)
+    except Exception as e:
+        return f"Failed to get graph context: {e}"
+
+
+@mcp.tool()
+def somnia_sltm_sample(
+    limit: int = 20,
+    sort_by: str = "edge_count",
+    max_decay: float = 0.15
+) -> str:
+    """Sample faded/SLTM nodes for archaeology triage.
+
+    Returns low-decay nodes ranked by connectivity, age, or decay level.
+    Well-connected but faded nodes are prime candidates for resurfacing
+    or deliberate archival. Each node includes summaries of its connections.
+
+    Args:
+        limit:     Max nodes to return (default 20, max 50)
+        sort_by:   "edge_count" | "decay" | "age" (default "edge_count")
+        max_decay: Only nodes below this decay threshold (default 0.15)
+    """
+    try:
+        data = _api_get("/sltm/sample", {
+            "limit": limit,
+            "sort_by": sort_by,
+            "max_decay": max_decay
+        })
+        return json.dumps(data, indent=2, default=str)
+    except Exception as e:
+        return f"Failed to sample SLTM: {e}"
+
+
+@mcp.tool()
+def somnia_apply_operations(
+    operations: list[dict],
+    dream_id: str = ""
+) -> str:
+    """Apply graph operations through the gated write interface.
+
+    This is the primary write tool for Quies agents. Accepts a list of
+    operation dicts and applies them to the graph with validation and
+    sovereignty enforcement (pinned nodes cannot be modified).
+
+    Supported operations:
+      create_node:       {op, id, type, content, metadata, epistemic_status}
+      create_edge:       {op, source_id, target_id, type, weight}
+      reinforce_edge:    {op, source_id, target_id}
+      mark_processed:    {op, inbox_id}
+      update_node:       {op, id, new_content, reason}  (blocked on pinned)
+      adjust_decay:      {op, id, delta, reason}
+      append_dream_note: {op, id, note}
+      suggest_pin:       {op, id, reason}  (suggestion only)
+      suggest_prune_edge:{op, source_id, target_id, reason}  (suggestion only)
+
+    Args:
+        operations: List of operation dicts, each with an "op" field
+        dream_id:   Optional dream ID for diagnostics linkage
+    """
+    try:
+        payload = {"operations": operations}
+        if dream_id:
+            payload["dream_id"] = dream_id
+        data = _api_post("/apply_operations", payload)
+        return json.dumps(data, indent=2, default=str)
+    except Exception as e:
+        return f"Failed to apply operations: {e}"
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
