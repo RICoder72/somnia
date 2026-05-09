@@ -41,6 +41,7 @@ services:
       - "8011:8011"   # MCP server (SSE)
     volumes:
       - ./quies:/app:ro
+      - ./shared:/app/shared:ro
       - quies-data:/data/somnia
       # somnia_provision creates workspaces/{id}/ dirs and writes portal-manifest.json
       - ${SOMNIA_WORKSPACES_DIR:-./workspaces}:/data/workspaces
@@ -51,6 +52,10 @@ services:
       SOMNIA_DEBUG: "false"
       SOMNIA_DATABASE_URL: "postgresql://${POSTGRES_USER:-somnia}:${POSTGRES_PASSWORD}@somnia-postgres:5432/somnia"
       QUIES_SOLO_WORK_DIR: "/data/workspaces/claude/findings"
+      SOMNIA_SECRETS_BACKEND: ${SOMNIA_SECRETS_BACKEND:-env}
+      SOMNIA_MASTER_KEY: ${SOMNIA_MASTER_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
     networks:
       - mcp-net
@@ -76,7 +81,11 @@ services:
       - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs
       - ${SOMNIA_RUNTIME_DIR:-./runtime}:/data/runtime
       - ${SOMNIA_DATA_ROOT:-/volume1/docker/somnia}/publish:/data/publish
+      - ./shared:/app/shared:ro
     environment:
+      SOMNIA_SECRETS_BACKEND: ${SOMNIA_SECRETS_BACKEND:-env}
+      SOMNIA_MASTER_KEY: ${SOMNIA_MASTER_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
       CREDENTIALS_API_KEY: ${CREDENTIALS_API_KEY:-}
       DATABASE_URL: "postgresql://${POSTGRES_USER:-somnia}:${POSTGRES_PASSWORD}@somnia-postgres:5432/somnia"
@@ -178,6 +187,28 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5s
+
+  # ── Optional: credentials-service (1Password backend only) ──────────
+  # Uncomment if using SOMNIA_SECRETS_BACKEND=1password with the HTTP mode.
+  # Requires OP_SERVICE_ACCOUNT_TOKEN in .env.
+  # Not needed for env or file backends (the default).
+  #
+  # credentials-service:
+  #   build:
+  #     context: ../credentials-service
+  #     dockerfile: Dockerfile
+  #   container_name: credentials-service
+  #   restart: unless-stopped
+  #   environment:
+  #     OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN}
+  #     INTERNAL_API_KEY: ${CREDENTIALS_API_KEY:-}
+  #   networks:
+  #     - mcp-net
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -f http://localhost:3100/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
 
   # watchdog — optional container health monitor (separate repo: ../watchdog)
   # Monitors service health and restarts containers that fail health checks.

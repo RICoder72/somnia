@@ -34,6 +34,11 @@ from work_queue import (
     TIER_EDGE_DECAY,
 )
 
+# shared/ is mounted at /app/shared — add /app to path for cross-service imports
+import sys as _sys
+if '/app' not in _sys.path:
+    _sys.path.insert(0, '/app')
+
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
 
@@ -137,71 +142,57 @@ def cascade_structural_warmth(node_id: str, delta: float):
 # ============================================================================
 
 def get_claude_auth():
-    """Retrieve Claude authentication from environment or 1Password."""
-    oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
-    if oauth_token:
-        return ('oauth', oauth_token)
+    """Retrieve Claude authentication via the unified secrets interface."""
+    try:
+        from shared.secrets import get_secret
+    except ImportError:
+        # Fallback if shared module not mounted (dev/testing)
+        app.logger.warning("shared.secrets not available, falling back to env vars")
+        oauth = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+        if oauth:
+            return ('oauth', oauth)
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if api_key:
+            return ('api_key', api_key)
+        return (None, None)
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    oauth = get_secret("claude.oauth_token")
+    if oauth:
+        return ('oauth', oauth)
+
+    api_key = get_secret("claude.api_key")
     if api_key:
         return ('api_key', api_key)
 
-    oauth_ref = cfg('api.oauth_credentials_ref')
-    try:
-        result = subprocess.run(
-            ["op", "read", oauth_ref],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode == 0:
-            return ('oauth', result.stdout.strip())
-    except (FileNotFoundError, Exception) as e:
-        app.logger.debug(f"OAuth token not in 1Password: {e}")
-
-    api_ref = cfg('api.credentials_ref')
-    try:
-        result = subprocess.run(
-            ["op", "read", api_ref],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode == 0:
-            return ('api_key', result.stdout.strip())
-        else:
-            app.logger.error(f"1Password credential fetch failed: {result.stderr}")
-            return (None, None)
-    except FileNotFoundError:
-        app.logger.error("1Password CLI not found and no auth env vars set")
-        return (None, None)
-    except Exception as e:
-        app.logger.error(f"Exception getting credentials: {e}")
-        return (None, None)
+    return (None, None)
 
 
 def get_api_key():
-    """Return the raw Anthropic API key regardless of OAuth preference.
+    """Return the raw Anthropic API key via unified secrets interface.
 
     Used by dream-cycle paths that fall back to direct API auth when
     Claude Code OAuth isn't available (solo_work recovery, consolidation
-    loop). The conversation harvester that originally motivated this
-    helper has been removed — harvesting is now done in-session by
-    Claude using recent_chats/conversation_search, not via the daemon.
+    loop).
     """
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if key:
-        return key
-    api_ref = cfg('api.credentials_ref')
     try:
-        result = subprocess.run(
-            ["op", "read", api_ref],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode == 0:
-            return result.stdout.strip() or None
-        app.logger.warning(f"get_api_key: 1Password lookup failed: {result.stderr.strip()[:200]}")
-    except FileNotFoundError:
-        app.logger.warning("get_api_key: 1Password CLI not found")
-    except Exception as e:
-        app.logger.warning(f"get_api_key: {e}")
-    return None
+        from shared.secrets import get_secret
+        return get_secret("claude.api_key")
+    except ImportError:
+        # Fallback if shared module not mounted
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if key:
+            return key
+        api_ref = cfg('api.credentials_ref')
+        try:
+            result = subprocess.run(
+                ["op", "read", api_ref],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                return result.stdout.strip() or None
+        except Exception:
+            pass
+        return None
 
 
 # ============================================================================
