@@ -35,8 +35,21 @@ CLAUDE_DIR="${HOME}/.claude"
 if [ -d "$AGENTS_SRC" ]; then
     mkdir -p "${CLAUDE_DIR}/agents"
     cp ${AGENTS_SRC}/*.md "${CLAUDE_DIR}/agents/" 2>/dev/null
-    [ -f "${AGENTS_SRC}/mcp.json" ] && cp "${AGENTS_SRC}/mcp.json" "${CLAUDE_DIR}/.mcp.json"
     echo "  Quies agents installed: $(ls ${CLAUDE_DIR}/agents/*.md 2>/dev/null | wc -l) agents"
+fi
+
+# Register MCP servers via CLI so they appear in settings.json (user scope).
+# The old approach of copying .mcp.json doesn't work — that's project-level
+# config and agents run in /tmp. claude mcp add --scope user writes to
+# ~/.claude/settings.json which is always visible.
+if [ -f "${AGENTS_SRC}/mcp.json" ]; then
+    echo "  Registering MCP servers..."
+    for name in $(python3 -c "import json; print(' '.join(json.load(open('${AGENTS_SRC}/mcp.json')).keys()))"); do
+        url=$(python3 -c "import json; print(json.load(open('${AGENTS_SRC}/mcp.json'))['${name}']['url'])")
+        claude mcp add --transport http --scope user "$name" "$url" 2>/dev/null && \
+            echo "    ✓ ${name} → ${url}" || \
+            echo "    ✗ ${name} failed"
+    done
 fi
 
 # Start the Flask API in the background

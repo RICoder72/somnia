@@ -248,6 +248,10 @@ def resolve_edge_ids(edge_ids_json):
 
     resolved = []
     for eid in edge_ids:
+        # Agent-based dreams store dummy integer counts, not real UUIDs.
+        # Skip non-string IDs to avoid text=integer type mismatch.
+        if not isinstance(eid, str):
+            continue
         row = execute(
             "SELECT source_id, target_id, type FROM edges WHERE id = %s",
             (eid,), fetch='one')
