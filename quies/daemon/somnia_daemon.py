@@ -34,10 +34,11 @@ from work_queue import (
     TIER_EDGE_DECAY,
 )
 
-# shared/ is mounted at /app/shared — add /app to path for cross-service imports
+# shared/ is mounted at /opt/shared (or /app/shared via compose)
 import sys as _sys
-if '/app' not in _sys.path:
-    _sys.path.insert(0, '/app')
+for _shared_root in ('/opt', '/app'):
+    if _shared_root not in _sys.path:
+        _sys.path.insert(0, _shared_root)
 
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
@@ -142,57 +143,94 @@ def cascade_structural_warmth(node_id: str, delta: float):
 # ============================================================================
 
 def get_claude_auth():
-    """Retrieve Claude authentication via the unified secrets interface."""
+    """Retrieve Claude authentication via the unified secrets interface.
+
+    Tries shared.secrets first (respects SOMNIA_SECRETS_BACKEND), then
+    falls back to env vars and op CLI for backward compatibility during
+    the transition period.
+    """
+    # Primary path: shared secrets module
     try:
         from shared.secrets import get_secret
-    except ImportError:
-        # Fallback if shared module not mounted (dev/testing)
-        app.logger.warning("shared.secrets not available, falling back to env vars")
-        oauth = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+        oauth = get_secret("claude.oauth_token")
         if oauth:
             return ('oauth', oauth)
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        api_key = get_secret("claude.api_key")
         if api_key:
             return ('api_key', api_key)
-        return (None, None)
+    except ImportError:
+        pass
+    except Exception as e:
+        app.logger.debug(f"shared.secrets lookup failed: {e}")
 
-    oauth = get_secret("claude.oauth_token")
+    # Fallback: direct env vars (covers cases where shared module
+    # is available but backend doesn't have the key yet)
+    oauth = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     if oauth:
         return ('oauth', oauth)
-
-    api_key = get_secret("claude.api_key")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if api_key:
         return ('api_key', api_key)
+
+    # Last resort: op CLI (1Password direct, no shared module needed)
+    oauth_ref = cfg('api.oauth_credentials_ref')
+    try:
+        result = subprocess.run(
+            ["op", "read", oauth_ref],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return ('oauth', result.stdout.strip())
+    except Exception:
+        pass
+
+    api_ref = cfg('api.credentials_ref')
+    try:
+        result = subprocess.run(
+            ["op", "read", api_ref],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return ('api_key', result.stdout.strip())
+    except Exception:
+        pass
 
     return (None, None)
 
 
 def get_api_key():
-    """Return the raw Anthropic API key via unified secrets interface.
+    """Return the raw Anthropic API key.
 
-    Used by dream-cycle paths that fall back to direct API auth when
-    Claude Code OAuth isn't available (solo_work recovery, consolidation
-    loop).
+    Tries shared.secrets → env var → op CLI, in order.
     """
+    # Primary: shared secrets
     try:
         from shared.secrets import get_secret
-        return get_secret("claude.api_key")
-    except ImportError:
-        # Fallback if shared module not mounted
-        key = os.environ.get("ANTHROPIC_API_KEY")
+        key = get_secret("claude.api_key")
         if key:
             return key
-        api_ref = cfg('api.credentials_ref')
-        try:
-            result = subprocess.run(
-                ["op", "read", api_ref],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode == 0:
-                return result.stdout.strip() or None
-        except Exception:
-            pass
-        return None
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # Fallback: direct env var
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return key
+
+    # Last resort: op CLI
+    api_ref = cfg('api.credentials_ref')
+    try:
+        result = subprocess.run(
+            ["op", "read", api_ref],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+    except Exception:
+        pass
+    return None
 
 
 # ============================================================================

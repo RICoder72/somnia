@@ -41,7 +41,7 @@ services:
       - "8011:8011"   # MCP server (SSE)
     volumes:
       - ./quies:/app:ro
-      - ./shared:/app/shared:ro
+      - ./shared:/opt/shared:ro
       - quies-data:/data/somnia
       # somnia_provision creates workspaces/{id}/ dirs and writes portal-manifest.json
       - ${SOMNIA_WORKSPACES_DIR:-./workspaces}:/data/workspaces
@@ -81,7 +81,7 @@ services:
       - ${SOMNIA_OUTPUTS_DIR:-./outputs}:/data/outputs
       - ${SOMNIA_RUNTIME_DIR:-./runtime}:/data/runtime
       - ${SOMNIA_DATA_ROOT:-/volume1/docker/somnia}/publish:/data/publish
-      - ./shared:/app/shared:ro
+      - ./shared:/opt/shared:ro
     environment:
       SOMNIA_SECRETS_BACKEND: ${SOMNIA_SECRETS_BACKEND:-env}
       SOMNIA_MASTER_KEY: ${SOMNIA_MASTER_KEY:-}

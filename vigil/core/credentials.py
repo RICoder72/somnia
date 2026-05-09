@@ -20,8 +20,9 @@ logger = logging.getLogger(__name__)
 _USE_SHARED = False
 try:
     import sys
-    if '/app' not in sys.path:
-        sys.path.insert(0, '/app')
+    for _root in ('/opt', '/app'):
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
     from shared.secrets import get_secret as _get_secret
     _USE_SHARED = True
 except ImportError:
