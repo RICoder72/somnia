@@ -75,43 +75,39 @@ Somnia uses an external Docker network so containers can be added or removed wit
 docker network create mcp-net
 ```
 
-### 2. Clone and configure
+### 2. Clone and bootstrap
 
 ```bash
 git clone https://github.com/RICoder72/somnia.git
 cd somnia
-cp .env.example .env
+./bootstrap.sh
 ```
 
-Edit `.env` and fill in your values:
+The bootstrap script handles everything: verifies Docker is present, prompts
+for configuration (base domain, admin email, API key), generates secrets,
+writes `.env`, and brings up the full stack. Health checks run automatically.
 
-```env
-POSTGRES_PASSWORD=your_secure_password
-ANTHROPIC_API_KEY=sk-ant-...
-```
+For manual configuration, copy `.env.example` to `.env` and edit directly,
+then run `docker compose up -d`.
 
 **Path configuration** — by default, persistent data is stored at `/volume1/docker/somnia` (the standard Synology NAS path). If you're running on a regular Linux host, override this in `.env`:
 
 ```env
 SOMNIA_DATA_ROOT=/opt/somnia          # or wherever you want persistent data
-SOMNIA_DOMAINS_DIR=/opt/somnia/domains
-SOMNIA_DOCUMENTS_DIR=/opt/somnia/documents
-SOMNIA_OUTPUTS_DIR=/opt/somnia/outputs
-SOMNIA_CONFIG_DIR=/opt/somnia/config
-SOMNIA_REPOS_DIR=/opt/somnia/repos
 ```
 
-### 3. Start the stack
+### 3. First run
 
-```bash
-docker compose up -d
-```
+On first MCP connection, `somnia_session` detects the fresh deployment
+(only seed nodes in the graph, no workspaces) and returns a bootstrap
+guide. Claude walks you through:
 
-To start only the core services (memory + tools, no portal/router):
+- Creating your first workspace
+- Setting up service integrations (email, calendar, storage)
+- Configuring notification channels
 
-```bash
-docker compose up -d postgres quies vigil fabrica
-```
+The seed graph ships with 12 foundational nodes that establish Somnia's
+operating philosophy. They connect to your organic nodes as the graph grows.
 
 ### 4. Verify
 
@@ -156,6 +152,18 @@ Replace `your-host` with your server's IP address or hostname. If running locall
 
 ---
 
+## Service Integrations (Hooks)
+
+Somnia uses a hook system to abstract service integrations. When Claude sends
+a message, it doesn't care whether the backend is Signal, SMS, or email — the
+hook system resolves the request to the right account and adapter based on
+workspace bindings and global defaults.
+
+See `docs/HOOKS.md` for the complete pattern, including how to write new
+adapters, register accounts, and configure workspace bindings.
+
+---
+
 ## Project Structure
 
 ```
@@ -189,10 +197,15 @@ somnia/
 ├── docs/                # System documentation
 │   ├── VISION.md        # Philosophy and concepts
 │   ├── ARCHITECTURE.md  # Technical architecture
+│   ├── HOOKS.md         # Service abstraction and account resolution
 │   ├── WONDERING.md     # Autonomous research capability
 │   └── MCP_DESIGN.md    # MCP interface design
+├── shared/              # Cross-service shared code (secrets module)
 ├── docker-compose.yml
+├── bootstrap.sh         # Interactive install script
 ├── .env.example
+├── CONTRIBUTING.md
+├── CODE_OF_CONDUCT.md
 └── LICENSE.md
 ```
 
