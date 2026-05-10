@@ -1457,6 +1457,8 @@ def _dispatch_quies_agent(mode: str, dream_id: str, budget_usd: float = None):
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "result_text": "",
+                "cli_json": None,
+                "stderr": (result.stderr or "")[:10000],
             }
 
         # Parse JSON output from claude -p
@@ -1484,6 +1486,8 @@ def _dispatch_quies_agent(mode: str, dream_id: str, budget_usd: float = None):
             "result_text": result_text,
             "duration_seconds": duration,
             "error": None,
+            "cli_json": output,
+            "stderr": (result.stderr or "")[:10000],
         }
 
     except subprocess.TimeoutExpired:
@@ -1496,6 +1500,8 @@ def _dispatch_quies_agent(mode: str, dream_id: str, budget_usd: float = None):
             "input_tokens": 0,
             "output_tokens": 0,
             "result_text": "",
+            "cli_json": None,
+            "stderr": "",
         }
     except json.JSONDecodeError as e:
         duration = int((datetime.now() - started).total_seconds())
@@ -1507,6 +1513,8 @@ def _dispatch_quies_agent(mode: str, dream_id: str, budget_usd: float = None):
             "input_tokens": 0,
             "output_tokens": 0,
             "result_text": result.stdout[:1000] if result.stdout else "",
+            "cli_json": None,
+            "stderr": (result.stderr or "")[:10000],
         }
     except Exception as e:
         duration = int((datetime.now() - started).total_seconds())
@@ -1518,6 +1526,8 @@ def _dispatch_quies_agent(mode: str, dream_id: str, budget_usd: float = None):
             "input_tokens": 0,
             "output_tokens": 0,
             "result_text": "",
+            "cli_json": None,
+            "stderr": "",
         }
 
 
@@ -1541,10 +1551,34 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
         }
 
     # ── Dispatch agent ──────────────────────────────────────────────────
+    agent_name = AGENT_MAP.get(mode, 'unknown')
+    run_id = str(uuid.uuid4())
+
     log_event('info', mode.replace('process', 'dream'),
-              f'Dispatching agent: {AGENT_MAP.get(mode)}',
-              {'dream_id': dream_id, 'mode': mode},
+              f'Dispatching agent: {agent_name}',
+              {'dream_id': dream_id, 'mode': mode, 'run_id': run_id},
               dream_id=dream_id)
+
+    # Record the dispatch in agent_runs
+    dispatch_params = {
+        "dream_id": dream_id,
+        "mode": mode,
+        "budget_usd": budget_override or cfg(f'budget.max_cost_{_mode_to_budget_key(mode)}'),
+        "graph_stats": {
+            "node_count": graph_stats_before['node_count'],
+            "edge_count": graph_stats_before['edge_count'],
+            "inbox_pending": graph_stats_before['inbox_pending'],
+        }
+    }
+    try:
+        execute("""
+            INSERT INTO agent_runs (id, dream_id, mode, agent_name, started_at,
+                                    status, dispatch_params)
+            VALUES (%s, %s, %s, %s, %s, 'dispatched', %s)
+        """, (run_id, dream_id, mode, agent_name, started_at,
+              json.dumps(dispatch_params)))
+    except Exception as _ar_err:
+        logger.warning(f"agent_runs INSERT failed (non-fatal): {_ar_err}")
 
     agent_result = _dispatch_quies_agent(mode, dream_id, budget_override)
 
@@ -1553,13 +1587,34 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
     cost_usd = agent_result.get('cost_usd', 0.0)
     summary = agent_result.get('result_text', '')[:2000]
 
+    # ── Update agent_runs with result ───────────────────────────────────
+    ar_status = 'failed' if agent_result.get('error') else 'success'
+    try:
+        execute("""
+            UPDATE agent_runs SET
+                ended_at = %s, exit_code = %s, duration_seconds = %s,
+                cost_usd = %s, input_tokens = %s, output_tokens = %s,
+                cli_json = %s, result_text = %s, stderr = %s,
+                status = %s, error = %s
+            WHERE id = %s
+        """, (ended_at, agent_result.get('exit_code'),
+              duration_seconds, cost_usd,
+              agent_result.get('input_tokens', 0),
+              agent_result.get('output_tokens', 0),
+              json.dumps(agent_result.get('cli_json')) if agent_result.get('cli_json') else None,
+              summary, agent_result.get('stderr'),
+              ar_status, agent_result.get('error'),
+              run_id))
+    except Exception as _ar_err:
+        logger.warning(f"agent_runs UPDATE failed (non-fatal): {_ar_err}")
+
     # ── Handle errors ───────────────────────────────────────────────────
     if agent_result.get('error'):
         error_msg = agent_result['error']
         execute("""
-            INSERT INTO dream_log (id, started_at, ended_at, interrupted, summary)
-            VALUES (%s, %s, %s, TRUE, %s)
-        """, (dream_id, started_at, ended_at,
+            INSERT INTO dream_log (id, started_at, ended_at, interrupted, mode, summary)
+            VALUES (%s, %s, %s, TRUE, %s, %s)
+        """, (dream_id, started_at, ended_at, mode,
               f'[{mode}] Agent error: {error_msg[:500]}'))
 
         log_event('error', mode.replace('process', 'dream'),
@@ -1597,10 +1652,10 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
     execute("""
         INSERT INTO dream_log (
             id, started_at, ended_at, interrupted,
-            summary, reflections,
+            mode, summary, reflections,
             nodes_created, edges_created, edges_reinforced
-        ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s)
-    """, (dream_id, started_at, ended_at,
+        ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s, %s)
+    """, (dream_id, started_at, ended_at, mode,
           f"[{mode}] {summary[:500]}", '',
           json.dumps(list(range(nodes_ct))),
           json.dumps(list(range(edges_ct))),
@@ -1617,16 +1672,10 @@ def run_consolidation(dry_run=False, mode='process', budget_override=None):
     })
 
     # ── Diagnostics ─────────────────────────────────────────────────────
-    output_for_diag = {
-        "total_cost_usd": cost_usd,
-        "usage": {
-            "input_tokens": agent_result.get('input_tokens', 0),
-            "output_tokens": agent_result.get('output_tokens', 0),
-        }
-    }
     log_diagnostics(dream_id, graph_stats_before,
                     graph_stats_after=graph_stats_after,
-                    cli_output=output_for_diag, exit_code=agent_result.get('exit_code', 0),
+                    cli_output=agent_result.get('cli_json'),
+                    exit_code=agent_result.get('exit_code', 0),
                     duration_ms=duration_seconds * 1000,
                     op_results=op_results)
 
@@ -3254,6 +3303,9 @@ def index():
             "GET /inbox": "List STM",
             "GET /dreams": "List dreams",
             "GET /dreams/<id>": "Dream details",
+            "GET /agent_runs": "List agent dispatch records (?limit, ?mode, ?status)",
+            "GET /agent_runs/<id>": "Full agent run with cli_json and stderr",
+            "GET /agent_runs/<id>/stderr": "Agent stderr only",
             "GET /activity": "Activity summary",
             "POST /activity": "Record activity",
             "GET /journal": "Dream journal",
@@ -3462,6 +3514,53 @@ def get_dream(dream_id):
     if not row:
         return jsonify({"error": "Dream not found"}), 404
     return jsonify(_serialize_row(row))
+
+
+@app.route("/agent_runs", methods=["GET"])
+def list_agent_runs():
+    """List agent dispatch records. Supports ?limit=N, ?mode=X, ?status=X."""
+    limit = request.args.get("limit", 20, type=int)
+    mode = request.args.get("mode")
+    status = request.args.get("status")
+
+    query = "SELECT id, dream_id, mode, agent_name, started_at, ended_at, " \
+            "exit_code, duration_seconds, cost_usd, input_tokens, output_tokens, " \
+            "status, error, result_text FROM agent_runs"
+    params = []
+    clauses = []
+    if mode:
+        clauses.append("mode = %s")
+        params.append(mode)
+    if status:
+        clauses.append("status = %s")
+        params.append(status)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY started_at DESC LIMIT %s"
+    params.append(limit)
+
+    rows = execute(query, tuple(params), fetch='all')
+    return jsonify({"agent_runs": _serialize_rows(rows), "count": len(rows or [])})
+
+
+@app.route("/agent_runs/<run_id>", methods=["GET"])
+def get_agent_run(run_id):
+    """Get full agent run record including cli_json and stderr."""
+    row = execute("SELECT * FROM agent_runs WHERE id = %s", (run_id,), fetch='one')
+    if not row:
+        return jsonify({"error": "Agent run not found"}), 404
+    return jsonify(_serialize_row(row))
+
+
+@app.route("/agent_runs/<run_id>/stderr", methods=["GET"])
+def get_agent_stderr(run_id):
+    """Get just the stderr from an agent run (quick debugging)."""
+    row = execute("SELECT stderr, mode, status FROM agent_runs WHERE id = %s",
+                  (run_id,), fetch='one')
+    if not row:
+        return jsonify({"error": "Agent run not found"}), 404
+    return jsonify({"stderr": row.get('stderr', ''),
+                    "mode": row.get('mode'), "status": row.get('status')})
 
 
 
