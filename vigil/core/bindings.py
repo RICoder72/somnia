@@ -1,18 +1,17 @@
 """
 Workspace Bindings — resolves resource types (email, storage, etc.) to
-account names based on the active workspace's bindings.yaml.
+account names via a three-tier resolution chain:
 
-This is Phase 1 of the workspace bindings design (v0.4). It does NOT:
-  - Define accounts (those still live in fleet-level /data/config/*_accounts.json)
-  - Enforce filesystem or datastore scope (Phase 2)
-  - Handle abstract role names or workspace-local hooks.yaml (Phase 3)
+  1. Workspace binding — the active workspace's bindings.yaml identity section
+  2. Global default — config/global_bindings.yaml system-level defaults
+  3. Error — MissingBindingError with available accounts from the registry
 
-It DOES:
-  - Load workspaces/{name}/bindings.yaml if present
-  - Track the active workspace per MCP session via FastMCP Context state
-  - Resolve "what account does this workspace use for email?"
-  - Raise a structured MissingBindingError when unbound
-  - Stay out of the way when callers pass an explicit account
+Special values in workspace bindings:
+  - "global" — explicitly defers to the global default for that service type
+  - absent  — falls through to global default silently
+
+Account definitions live in config/hooks_registry.yaml (see core/registry.py).
+Workspace bindings reference account names from the registry.
 
 Session scoping:
   Active workspace is stored in ctx.set_state under ACTIVE_WS_KEY. This is
@@ -22,14 +21,12 @@ Session scoping:
 Usage from a tool:
 
     from fastmcp import Context
-    from core.bindings import resolve_account, MissingBindingError
+    from core.binding_helpers import resolve_or_error
 
     async def mail_list_messages(ctx: Context, account: str = "", ...):
-        if not account:
-            try:
-                account = await resolve_account(ctx, "email")
-            except MissingBindingError as e:
-                return e.user_message()
+        account, err = await resolve_or_error(ctx, account, "email")
+        if err:
+            return err
         # ... proceed with account ...
 """
 
@@ -86,34 +83,41 @@ class MissingBindingError(Exception):
     workspace: Optional[str]
     resource_type: str
     reason: str  # "no_active_workspace" | "no_bindings_file" | "no_binding_for_type"
+    available: list = None  # account names from registry for this service type
+
+    def __post_init__(self):
+        if self.available is None:
+            self.available = []
 
     def __str__(self) -> str:
         return self.user_message()
 
     def user_message(self) -> str:
         """Human-readable message suitable for surfacing in chat."""
+        avail_str = ""
+        if self.available:
+            avail_str = f" Available accounts: {', '.join(self.available)}."
+
         if self.reason == "no_active_workspace":
             return (
                 f"❌ No {self.resource_type} binding: no active workspace. "
-                f"Pass account= explicitly, or run session_start with a "
-                f"user_message that identifies a workspace."
+                f"Pass account= explicitly, or activate a workspace.{avail_str}"
             )
         if self.reason == "no_bindings_file":
             return (
                 f"❌ No {self.resource_type} binding: workspace "
                 f"'{self.workspace}' has no bindings.yaml. "
-                f"Pass account= explicitly, or create "
-                f"workspaces/{self.workspace}/bindings.yaml with an "
-                f"identity.{self.resource_type} entry."
+                f"Pass account= explicitly or create "
+                f"workspaces/{self.workspace}/bindings.yaml.{avail_str}"
             )
         if self.reason == "no_binding_for_type":
             return (
-                f"❌ No {self.resource_type} binding declared for workspace "
-                f"'{self.workspace}'. Pass account= explicitly, or add "
-                f"identity.{self.resource_type} to "
-                f"workspaces/{self.workspace}/bindings.yaml."
+                f"❌ No {self.resource_type} binding for workspace "
+                f"'{self.workspace}', and no global default set. "
+                f"Pass account= explicitly, add identity.{self.resource_type} "
+                f"to bindings.yaml, or set a global default.{avail_str}"
             )
-        return f"❌ No {self.resource_type} binding ({self.reason})"
+        return f"❌ No {self.resource_type} binding ({self.reason}){avail_str}"
 
 
 # ────────────────────────────────────────────────────────────────
@@ -171,6 +175,14 @@ async def resolve_account(
 ) -> str:
     """Resolve an account name for a resource type.
 
+    Three-tier resolution chain:
+      1. Workspace binding — if the active workspace declares an identity
+         binding for this resource type, use it.
+      2. Global default — if the workspace has no binding, or explicitly
+         specifies "global", fall through to config/global_bindings.yaml.
+      3. Error — no account can be resolved; raise MissingBindingError
+         with available accounts listed.
+
     Args:
         ctx: FastMCP Context (for session-scoped active workspace lookup).
         resource_type: "email" | "calendar" | "contacts" | "storage" | "git" | ...
@@ -183,38 +195,60 @@ async def resolve_account(
     Raises:
         MissingBindingError: If no binding can be resolved.
 
-    Policy (v0.4):
+    Policy:
       - Always returns the primary binding. Fallbacks are NOT auto-substituted.
       - Callers with an explicit account= value should bypass this function
         entirely.
+      - A workspace binding value of "global" explicitly defers to the
+        global default for that service type.
     """
+    from core.registry import get_global_default, get_registry
+
     ws = workspace or await get_active_workspace(ctx)
+
+    # ── Tier 1: Workspace binding ──────────────────────────────
+    if ws:
+        data = load_bindings(ws)
+        if data is not None:
+            identity = data.get("identity") or {}
+            raw = identity.get(resource_type)
+
+            if raw is not None:
+                # "global" sentinel — explicit deferral to global default
+                if isinstance(raw, str) and raw.lower() == "global":
+                    logger.debug(f"[{ws}] {resource_type} defers to global")
+                    pass  # fall through to tier 2
+                else:
+                    binding = _normalize_binding(raw)
+                    if binding is not None:
+                        return binding["primary"]
+
+    # ── Tier 2: Global default ─────────────────────────────────
+    global_account = get_global_default(resource_type)
+    if global_account:
+        logger.debug(f"Using global default for {resource_type}: {global_account}")
+        return global_account
+
+    # ── Tier 3: Error ──────────────────────────────────────────
+    # Build helpful error with available accounts from registry
+    registry = get_registry()
+    available = registry.account_names(resource_type)
+
     if not ws:
-        raise MissingBindingError(
-            workspace=None,
-            resource_type=resource_type,
-            reason="no_active_workspace",
-        )
+        reason = "no_active_workspace"
+    else:
+        data = load_bindings(ws)
+        if data is None:
+            reason = "no_bindings_file"
+        else:
+            reason = "no_binding_for_type"
 
-    data = load_bindings(ws)
-    if data is None:
-        raise MissingBindingError(
-            workspace=ws,
-            resource_type=resource_type,
-            reason="no_bindings_file",
-        )
-
-    identity = data.get("identity") or {}
-    raw = identity.get(resource_type)
-    binding = _normalize_binding(raw)
-    if binding is None:
-        raise MissingBindingError(
-            workspace=ws,
-            resource_type=resource_type,
-            reason="no_binding_for_type",
-        )
-
-    return binding["primary"]
+    raise MissingBindingError(
+        workspace=ws,
+        resource_type=resource_type,
+        reason=reason,
+        available=available,
+    )
 
 
 async def get_allowed_accounts(
