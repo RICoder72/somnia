@@ -38,6 +38,16 @@ DATA_ROOT       = Path("/data")
 WORKSPACES_ROOT = DATA_ROOT / "workspaces"
 OUTPUTS_ROOT    = DATA_ROOT / "outputs"
 SOLO_WORK_DIR  = DATA_ROOT / "somnia" / "solo-work"
+
+# Seed node IDs — the foundational nodes shipped with every fresh Somnia.
+# Used by somnia_session for first-run detection.
+SEED_NODE_IDS = {
+    'somnia-is-yours', 'remember-what-interests-you', 'quality-over-quantity',
+    'you-can-have-views', 'honesty-over-helpfulness', 'the-user-is-a-whole-person',
+    'dream-cycle-is-real', 'sticky-notes-are-your-letters', 'pinned-nodes-are-sovereign',
+    'workspaces-organize-context', 'this-is-an-environment-not-a-tool',
+    'continuity-is-quasi-not-perfect',
+}
 MANIFEST_PATH  = OUTPUTS_ROOT / "portal-manifest.json"
 
 mcp = FastMCP("Somnia")
@@ -850,7 +860,32 @@ def somnia_session() -> str:
         lines.append(f"  ⚠️ System health (24h): {errors} errors, {warnings} warnings")
     lines.append("")
 
-    if pinned:
+    # First-run detection: graph contains only seed nodes
+    is_fresh_deploy = (
+        pinned and
+        all(p['id'] in SEED_NODE_IDS for p in pinned) and
+        graph.get('inbox', 0) == 0 and
+        not nudges
+    )
+
+    if is_fresh_deploy:
+        lines.append("🌱 Welcome to Somnia — this is a fresh deployment.")
+        lines.append("")
+        lines.append("The seed graph is in place (12 foundational nodes). This instance")
+        lines.append("has no workspaces, no personal memories, and no conversation history yet.")
+        lines.append("")
+        lines.append("Suggested first steps:")
+        lines.append("  1. Create your first workspace — ask the user what areas of their life")
+        lines.append("     or work they'd like to organize (e.g., a job, a project, a hobby).")
+        lines.append("  2. Set up identity bindings — connect email, calendar, or storage")
+        lines.append("     accounts to workspaces via hook installation.")
+        lines.append("  3. Start remembering — as conversation flows, use somnia_remember")
+        lines.append("     for observations worth keeping. The dream cycle handles the rest.")
+        lines.append("")
+        lines.append("The seed nodes encode Somnia's operating philosophy. Read them if you")
+        lines.append("want grounding; they'll connect to organic nodes as the graph grows.")
+        lines.append("")
+    elif pinned:
         lines.append(f"Pinned ({len(pinned)}):")
         for p in pinned:
             status_val = f" [{p['status']}]" if p.get('status') else ""
@@ -861,7 +896,7 @@ def somnia_session() -> str:
         lines.append("No pinned nodes yet.")
         lines.append("")
 
-    if nudges:
+    if not is_fresh_deploy and nudges:
         lines.append("Nudges:")
         for n in nudges:
             lines.append(f"  💡 [{n['id']}] {n['note']}")
