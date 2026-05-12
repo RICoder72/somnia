@@ -16,7 +16,7 @@ and any other communication channel associated with the project.
 ## Enforcement
 
 Unacceptable behavior can be reported to the project maintainer at
-conduct@example.com. Reports will be reviewed and responded to
+matthew.zanni@gmail.com. Reports will be reviewed and responded to
 as appropriate. The maintainer reserves the right to remove, edit,
 or reject contributions that violate this code of conduct.
 
