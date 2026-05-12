@@ -14,9 +14,9 @@ Usage:
     from core.registry import get_registry
 
     reg = get_registry()
-    account = reg.get_account("mail", "zannim@bsd-ri.net")
+    account = reg.get_account("mail", "user@example.com")
     all_mail = reg.list_accounts("mail")
-    exists = reg.account_exists("mail", "zannim@bsd-ri.net")
+    exists = reg.account_exists("mail", "user@example.com")
 """
 
 from __future__ import annotations

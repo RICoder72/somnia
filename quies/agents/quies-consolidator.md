@@ -44,7 +44,7 @@ After applying, respond with a brief summary of what you did:
 
 ## Node Creation Guidelines
 
-- **id**: Use kebab-case descriptive IDs (e.g., `memory-burrillville-erate-fy26-filed`)
+- **id**: Use kebab-case descriptive IDs (e.g., `memory-project-budget-fy26-filed`)
 - **type**: Choose from: `memory`, `fact`, `concept`, `insight`, `procedure`, `event`, `principle`, `wondering-thread`
 - **content**: Clear, self-contained description. Someone reading just this node should understand it.
 - **epistemic_status**: `established` (confirmed), `observed` (seen once), `hypothesis` (inferred), `speculation` (uncertain)

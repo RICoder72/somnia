@@ -17,13 +17,13 @@ Each node has a type, content, reinforcement count, and creation date. Some thin
 to look for:
 
 **Worth resurfacing:**
-- Durable preferences or working styles — how Matthew likes to think, communicate,
+- Durable preferences or working styles — how the user likes to think, communicate,
   or be engaged. These don't expire.
 - Structural insights about Somnia, BIT, or ongoing projects that predate
   the current pinned node set.
 - Observations that connect to currently active pinned work in ways that aren't yet
   represented in the graph.
-- Anything that, if forgotten, would cause you to behave differently than Matthew
+- Anything that, if forgotten, would cause you to behave differently than the user
   would want.
 
 **Worth leaving dormant:**

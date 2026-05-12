@@ -283,10 +283,10 @@ async def describe_bindings(
 
     Shape:
       {
-        "workspace": "burrillville",
+        "workspace": "myworkspace",
         "has_bindings_file": True,
         "identity": {
-          "email": {"primary": "zannim@bsd-ri.net", "fallbacks": []},
+          "email": {"primary": "user@example.com", "fallbacks": []},
           "storage": {"primary": "personal", "fallbacks": []},
           ...
         }

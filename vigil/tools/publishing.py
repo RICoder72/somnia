@@ -21,7 +21,7 @@ def register(mcp: FastMCP):
         Args:
             source: Path to the file to publish
             dest_name: Optional filename override
-            domain: Domain subdirectory (e.g. "burrillville")
+            domain: Domain subdirectory (e.g. "myworkspace")
             category: Category within domain: "files" (ephemeral downloads),
                       "docs" (durable documents), "apps" (web pages/dashboards).
                       Defaults to "files" when domain is specified."""

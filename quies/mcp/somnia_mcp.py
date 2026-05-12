@@ -336,7 +336,7 @@ def somnia_remember(
 
     Args:
         content: The observation to remember (be specific and concise)
-        domain: Optional domain/topic tag (e.g., "burrillville", "somnia")
+        domain: Optional domain/topic tag (e.g., "myworkspace", "somnia")
         source: Optional source identifier (e.g., conversation context)
     """
     data = {"content": content}
@@ -471,7 +471,7 @@ def somnia_pin(
     somnia_provision to create its storage footprint and portal card.
 
     Args:
-        id: Node ID (use kebab-case, e.g. "somnia", "burrillville")
+        id: Node ID (use kebab-case, e.g. "somnia", "myworkspace")
         content: Description of what this node represents
         properties: JSON string of properties to set/merge
         unpin: Set True to unpin (node stays in graph, loses durability)

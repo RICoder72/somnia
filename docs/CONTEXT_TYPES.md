@@ -16,12 +16,12 @@ Professional roles with structure, accountability, and deliverables.
 - Deadlines and deliverables
 - Institutional memory matters
 
-**Example: Burrillville Director of Technology**
+**Example: IT Director**
 ```yaml
 type: job
-name: burrillville
+name: work
 role: Director of Technology
-organization: Town of Burrillville
+organization: Acme School District
 
 assets:
   documents:
@@ -30,8 +30,8 @@ assets:
     - tech_plan_2026.docx
   policies:
     - acceptable_use_policy.md
-    - cjis_compliance.md
-    - ferpa_guidelines.md
+    - security_compliance.md
+    - data_privacy_guidelines.md
 
 workflows:
   - apns_token_renewal
@@ -40,8 +40,8 @@ workflows:
 
 contacts:
   - role: Superintendent
-  - role: Police Chief
-  - vendors: [Verkada, Meraki, etc.]
+  - role: Department Heads
+  - vendors: [security vendor, network vendor, etc.]
 
 compliance:
   - CJIS (police systems)
@@ -69,22 +69,22 @@ Things being actively developed with a defined end state.
 - Will eventually be "done" (or abandoned)
 - Needs technical context
 
-**Example: Bite Club**
+**Example: Game Project**
 ```yaml
 type: project
-name: bite-club
-description: Mobile zombie RTS game
+name: my-game
+description: Mobile strategy game
 
-repo: github.com/RICoder72/bite-club
+repo: github.com/myuser/my-game
 platform: Unity 6.1
 status: active
 
-current_focus: Tactical Scene Migration
+current_focus: Core gameplay loop
 architecture: Service Pattern, Definition-Based Content
 
 decisions:
   - 2025-01-12: Adopted Definition System
-  - 2025-07-22: Squad Room Architecture Cleanup
+  - 2025-07-22: Architecture Cleanup
 
 blocked_on: []
 next_milestone: Basic tactical gameplay loop
@@ -129,7 +129,7 @@ last_explored: 2025-12-15
 ```
 
 **What Claude should remember:**
-- What fascinates Matthew about this
+- What fascinates the user about this
 - Connections to other interests
 - Level of technical depth appropriate
 - Past discussions and insights
@@ -191,11 +191,11 @@ Personal context and relationship history.
 - Shapes how other contexts are approached
 
 **Examples:**
-- Matthew prefers tracer bullets over big upfront design
-- Military intelligence background shapes how he thinks about systems
-- Three sons, busy life, mobile-first usage
-- Enjoys etymology tangents
+- The user prefers tracer bullets over big upfront design
+- Professional background shapes how they think about systems
 - Values being treated as a competent partner
+- Enjoys tangential exploration
+- Trust built through collaboration
 
 **What Claude should remember:**
 - Communication preferences
@@ -238,11 +238,11 @@ Personal context and relationship history.
 ```
 
 **Example flow:**
-1. Working on **Burrillville** (job)
+1. Working on a **job workspace** (job)
 2. Need to push changes to a repo
 3. Recall **github_auth** skill
 4. Execute the procedure
-5. **Memory** notes: "Matthew prefers SSH over HTTPS when possible"
+5. **Memory** notes: "User prefers SSH over HTTPS when possible"
 6. Next time, skill could be updated
 
 ---
@@ -255,15 +255,15 @@ Each context type maps to node types:
 -- Job context
 INSERT INTO nodes (type, content, metadata) VALUES (
     'job',
-    'Director of Technology - Town of Burrillville',
-    '{"role": "Director of Technology", "org": "Town of Burrillville"}'
+    'Director of Technology - Acme School District',
+    '{"role": "Director of Technology", "org": "Acme School District"}'
 );
 
 -- Project context  
 INSERT INTO nodes (type, content, metadata) VALUES (
     'project',
-    'Bite Club - Mobile zombie RTS',
-    '{"repo": "github.com/RICoder72/bite-club", "status": "active"}'
+    'My Game - Mobile strategy game',
+    '{"repo": "github.com/myuser/my-game", "status": "active"}'
 );
 
 -- Interest
@@ -283,7 +283,7 @@ INSERT INTO nodes (type, content, metadata) VALUES (
 -- Memory
 INSERT INTO nodes (type, content, metadata) VALUES (
     'memory',
-    'Matthew prefers tracer bullet approach over big design upfront',
+    'User prefers tracer bullet approach over big design upfront',
     '{"category": "working_style", "confidence": "high"}'
 );
 ```
@@ -296,13 +296,12 @@ Edges connect them:
 
 ---
 
-## Migration from Somnia Domains
+## Migration from Flat Domains
 
-| Somnia Domain | Somnia Context Type |
+| Old Domain | Context Type |
 |---------------------|---------------------|
-| burrillville | Job |
-| bite-club | Project |
-| somnia | Project |
+| work | Job |
+| my-game | Project |
 | somnia | Project |
 | quantum | Interest |
 | gaming | Interest |
@@ -310,7 +309,6 @@ Edges connect them:
 | maker | Interest + Skills |
 | health | Personal (new type?) |
 | politics | Interest |
-| msf | Interest (game) |
 | projects | Meta (tracks projects) |
 | homelab | Skills + Project |
 | workstation | Skills |

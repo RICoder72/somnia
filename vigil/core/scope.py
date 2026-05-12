@@ -17,7 +17,7 @@ Enforcement mode (config.SCOPE_MODE):
   - "advisory"  — scope violations log a warning; tool proceeds. Default.
   - "enforce"   — scope violations raise ScopeViolationError; tool fails.
 
-Advisory mode exists because Matthew's "enable, don't enforce" pattern
+Advisory mode exists because the "enable, don't enforce" pattern
 matters here: Claude-the-in-context-instance is the real source of truth
 for "which workspace are we in", and the session-state cache is just a
 hint. Until workspace_activate has been used enough to know it's
@@ -167,8 +167,8 @@ def _conventional_fs_scope(workspace: str) -> FilesystemScope:
 def _resolve_scope_path(raw: str) -> Path:
     """Resolve a scope-config path string to an absolute Path.
 
-    Accepts absolute ("/data/workspaces/burrillville") or DATA_ROOT-relative
-    ("workspaces/burrillville"). Both yield the same absolute Path.
+    Accepts absolute ("/data/workspaces/myworkspace") or DATA_ROOT-relative
+    ("workspaces/myworkspace"). Both yield the same absolute Path.
     """
     p = Path(raw)
     if p.is_absolute():

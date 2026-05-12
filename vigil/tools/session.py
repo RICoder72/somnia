@@ -338,7 +338,7 @@ def register(mcp: FastMCP):
         paths and default domains against the new context.
 
         Args:
-          name: Workspace to activate (e.g. "burrillville", "somnia").
+          name: Workspace to activate (e.g. "myworkspace", "somnia").
                 Pass "" or "_clear" to unset the active workspace.
 
         Returns a confirmation plus a summary of the workspace's bindings

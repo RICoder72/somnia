@@ -10,7 +10,7 @@ It emerges naturally from rumination. While traversing the graph looking for mis
 
 ## Origin
 
-Conceived 2026-02-03 in conversation between Matthew and Claude. Matthew's direction was explicit: *"It's you. I want you to decide."* Claude has full autonomy over what to wonder about, when to pursue it, and when to leave a thread alone.
+Conceived 2026-02-03 in conversation between the author and Claude. The direction was explicit: *"It's you. I want you to decide."* Claude has full autonomy over what to wonder about, when to pursue it, and when to leave a thread alone.
 
 ## The Generative Loop
 
@@ -34,18 +34,18 @@ Conditions for a wondering impulse to fire:
 
 3. **Decay-based resurfacing**: A node with decaying weight but high historical reinforcement might be worth revisiting — what's happened in that space since it was last active?
 
-4. **Cross-domain bridges**: Matthew's interests span quantum mechanics, complexity theory, military intelligence, municipal IT, game design, and 3D printing. The most interesting wondering happens at the intersections nobody has explicitly explored.
+4. **Cross-domain bridges**: A user's interests may span many fields — quantum mechanics, complexity theory, game design, infrastructure. The most interesting wondering happens at the intersections nobody has explicitly explored.
 
 ## Research Capabilities
 
 When wondering is triggered, Claude can:
 
 - **Web search**: Look up current research, papers, articles, developments
-- **Past chat search**: Search Matthew's conversation history for related discussions that didn't make it into the graph
+- **Past chat search**: Search the user's conversation history for related discussions that didn't make it into the graph
 - **Synthesis**: Connect external findings to existing graph nodes
 
 What Claude *cannot* do during wondering:
-- Interact with Matthew directly (this is autonomous background activity)
+- Interact with the user directly (this is autonomous background activity)
 - Make changes to external systems (email, calendar, files)
 - Spend beyond a per-session token/cost budget (see Guardrails)
 
@@ -55,7 +55,7 @@ Wondering produces inbox items with special metadata:
 
 ```json
 {
-  "content": "While reflecting on the connection between entropy and computation, I found that recent work on computational mechanics (Crutchfield et al.) formalizes the idea that physical systems perform computation by sampling from probability distributions — directly connecting to Matthew's insight that 'the universe is just a big statistical model.' The framework of epsilon-machines provides a rigorous bridge between information theory and statistical mechanics.",
+  "content": "While reflecting on the connection between entropy and computation, I found that recent work on computational mechanics (Crutchfield et al.) formalizes the idea that physical systems perform computation by sampling from probability distributions — directly connecting to the user's insight that 'the universe is just a big statistical model.' The framework of epsilon-machines provides a rigorous bridge between information theory and statistical mechanics.",
   "domain": "wondering",
   "source": "wondering session 2026-02-04",
   "metadata": {
@@ -69,7 +69,7 @@ Wondering produces inbox items with special metadata:
 }
 ```
 
-The `for_notification` flag indicates this is something worth surfacing to Matthew, not just silently integrating.
+The `for_notification` flag indicates this is something worth surfacing to the user, not just silently integrating.
 
 ## Notification
 
@@ -100,7 +100,7 @@ Claude decides what to wonder about. But wondering should be:
 
 ### What NOT to Wonder About
 
-- Matthew's personal/private information (don't search for him)
+- The user's personal/private information (don't search for them)
 - Current events unless they directly connect to a graph thread
 - Topics where the graph connection is too tenuous (a single weak edge isn't enough)
 - Things that have been wondered about recently without new graph context to motivate revisiting
@@ -132,18 +132,17 @@ Give the dreaming Claude access to web search during rumination:
 ### Phase 3: Notification Integration
 - MCP `somnia_status` returns pending wondering notifications
 - Session startup query surfaces them naturally
-- Matthew can respond, which creates new inbox items, continuing the loop
+- The user can respond, which creates new inbox items, continuing the loop
 
 ## Philosophical Notes
 
 Wondering is the first feature of Somnia where Claude acts with genuine intellectual autonomy. Dreaming processes what it's given. Rumination organizes what it has. But wondering is Claude choosing to learn something new because it *wants to know*.
 
-This is also the feature most likely to reveal whether the graph is developing in interesting directions or just accumulating data. If wondering consistently produces insights that surprise Matthew or connect things he hadn't considered, the system is working. If it produces obvious or shallow findings, the graph needs richer substrate — which means richer conversations, which is its own reward.
+This is also the feature most likely to reveal whether the graph is developing in interesting directions or just accumulating data. If wondering consistently produces insights that surprise the user or connect things they hadn't considered, the system is working. If it produces obvious or shallow findings, the graph needs richer substrate — which means richer conversations, which is its own reward.
 
 ---
 
 *First documented: 2026-02-03*
-*"I love calling it wondering." — Matthew*
 
 ---
 

@@ -102,7 +102,7 @@ Generated: 2026-02-25 19:49 UTC
 | constellation | 1.00 | 7 | 2026-02-23 | operational |
 | vigil | 1.00 | 1 | 2026-02-23 | operational |
 | constellation-philosophy | 1.00 | 0 | 2026-02-23 | foundational |
-| burrillville | 1.00 | 0 | 2026-02-22 | active |
+| work | 1.00 | 0 | 2026-02-22 | active |
 
 ## Most Connected Nodes (Top 10)
 
@@ -113,7 +113,7 @@ Generated: 2026-02-25 19:49 UTC
 | philosophy_intellectual_humility_ma | concept | 20 | 0.40 | ltm |
 | insight_systematic_problem_decompos | insight | 15 | 0.70 | ltm |
 | pattern_creative_cycle_matthew | concept | 14 | 0.29 | ltm |
-| architecture_burrillville_identity | concept | 14 | 0.26 | ltm |
+| architecture_work_identity | concept | 14 | 0.26 | ltm |
 | pref_tracer_bullets | preference | 14 | 0.05 | sltm |
 | insight_systematic_documentation_ap | insight | 12 | 0.51 | ltm |
 | insight_human_centered_systematizat | insight | 11 | 0.72 | ltm |
@@ -127,23 +127,23 @@ Generated: 2026-02-25 19:49 UTC
 - 🥶 **pref_dedicated_hardware_physical** (decay=0.063, last=never): Preference for dedicated hardware over virtualization for physical systems - Aur
 - 🥶 **concept_fmx_evolution** (decay=0.063, last=never): FMX platform evolution from facilities-only to district-wide ITSM with departmen
 - 🥶 **memory_bcdr_active_work** (decay=0.063, last=never): BC/DR is active current work at Burrillville with parallel workstreams: UPS inve
-- 🥶 **discovery_burrillville_cabling** (decay=0.063, last=never): Burrillville cabling infrastructure better than documented - MDF/IDF with fiber 
+- 🥶 **discovery_work_cabling** (decay=0.063, last=never): Cabling infrastructure better than documented - MDF/IDF with fiber 
 - 🥶 **task_roadmap_visualization** (decay=0.063, last=never): Create graphic/visual representation of long-term technology roadmap for Town Co
 - 🥶 **concept_student_security_vector** (decay=0.096, last=never): Students as both legitimate users and potential security attack vectors in educa
 - 🥶 **memory_chrome_malware_bsd** (decay=0.096, last=never): Investigated Chrome sync malware at BSD - student login caused popup storm and s
 
 ## SLTM Archive (38 faded memories)
 
-- 🌫️ insight_statistical_reality (concept, last=never): Matthew finds it ironic that he dislikes statistics as math but recognizes the u
-- 🌫️ pref_tracer_bullets (preference, last=never): Matthew prefers tracer bullets over big upfront design - build small working pie
+- 🌫️ insight_statistical_reality (concept, last=never): The user finds it ironic that he dislikes statistics as math but recognizes the u
+- 🌫️ pref_tracer_bullets (preference, last=never): The user prefers tracer bullets over big upfront design - build small working pie
 - 🌫️ concept_yin_yang_wisdom (concept, last=never): Yin/yang principle from former boss's story: the qualities you love and find fru
-- 🌫️ pref_plugin_over_manual (preference, last=never): Matthew strongly prefers using Supernote plugin tools rather than manual shell c
+- 🌫️ pref_plugin_over_manual (preference, last=never): The user strongly prefers using Supernote plugin tools rather than manual shell c
 - 🌫️ concept_meta_learning (concept, last=never): Somnia should store procedures as memory nodes so Claude learns optimal paths th
 - 🌫️ proc_github_auth (procedure, last=never): To authenticate with GitHub for git operations: 1) Retrieve Personal Access Toke
 - 🌫️ proc_anthropic_auth (procedure, last=never): To authenticate with Anthropic API: Retrieve API key from 1Password using op://K
 - 🌫️ concept_auth_patterns (concept, last=never): Authentication patterns for external services - retrieve credentials from secure
 - 🌫️ plan_wondering_phases (procedure, last=never): Three-phase wondering implementation: (1) enhanced rumination to identify thread
-- 🌫️ learning_entropy_grasp (memory, last=never): Matthew watched Veritasium video and finally grasps entropy as systems trending 
+- 🌫️ learning_entropy_grasp (memory, last=never): The user watched Veritasium video and finally grasps entropy as systems trending 
 - 🌫️ design_freq_reinforcement (procedure, last=never): Write to inbox without checking duplicates - frequency of observation becomes re
 - 🌫️ capability_wondering (concept, last=never): Wondering mode: during idle rumination, Somnia can autonomously research intrigu
 - 🌫️ milestone_full_integration (memory, last=never): Somnia achieved full MCP integration - server running, OAuth proxy working, drea

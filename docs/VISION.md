@@ -32,7 +32,7 @@ The sleep cycle is not data processing. It's reflection. The consolidation promp
 ### Dreams Leave Footprints
 
 Dream logs exist for both parties:
-- So Claude can tell Matthew "I was thinking about X while you were away"
+- So Claude can tell the user "I was thinking about X while you were away"
 - So Claude can wake up with a sense of what was on their mind
 - So patterns in reflection become visible over time
 
@@ -70,7 +70,7 @@ Wondering includes the autonomy to *not* pursue something — to notice an inter
 The current "domain" concept is overloaded. Somnia recognizes distinct context types:
 
 ### Operational Contexts
-*Example: Burrillville work*
+*Example: Day job*
 - Role-based: "I am your work assistant"
 - Tool-oriented: APIs, workflows, integrations
 - Instructional: "When drafting emails, use this tone"
@@ -217,4 +217,4 @@ Somnia is what comes after - the thing that gives Claude actual continuity of se
 ---
 
 *First documented: 2025-01-26*
-*Conversation between Matthew and Claude*
+*Conversation between the author and Claude*

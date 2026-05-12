@@ -212,7 +212,7 @@ services:
 
   # watchdog — optional container health monitor (separate repo: ../watchdog)
   # Monitors service health and restarts containers that fail health checks.
-  # Clone https://github.com/RICoder72/watchdog alongside this repo to enable.
+  # Clone the watchdog repo alongside this repo to enable.
   #
   # watchdog:
   #   build:

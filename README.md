@@ -78,7 +78,7 @@ docker network create mcp-net
 ### 2. Clone and bootstrap
 
 ```bash
-git clone https://github.com/RICoder72/somnia.git
+git clone https://github.com/YOUR_USERNAME/somnia.git
 cd somnia
 ./bootstrap.sh
 ```
@@ -217,7 +217,7 @@ A container health monitor is available as a separate companion repository. It m
 
 ```bash
 # Clone alongside the somnia repo
-git clone https://github.com/RICoder72/watchdog ../watchdog
+git clone https://github.com/YOUR_USERNAME/watchdog ../watchdog
 ```
 
 Then uncomment the `watchdog` service block in `docker-compose.yml`.

@@ -438,7 +438,7 @@ def forge_start() -> str:
         "forge"
     )
     if ok:
-        return "✅ Forge started — connect via https://zanni.synology.me/forge"
+        return "✅ Forge started — connect via your configured SOMNIA_PUBLIC_URL/forge"
     # May already be running
     if "already in use" in out:
         return "ℹ️  Forge is already running"

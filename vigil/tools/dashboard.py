@@ -10,15 +10,18 @@ from config import PUBLIC_BASE_URL
 def register(mcp: FastMCP):
 
     @mcp.tool()
-    def dashboard_generate(domain: str = "burrillville") -> str:
+    def dashboard_generate(domain: str = "") -> str:
         """Regenerate the project dashboard for a domain.
 
         Queries Store for all projects, contacts, and relationships,
         then generates an interactive HTML dashboard and publishes it.
 
         Args:
-            domain: Domain to generate dashboard for (default: burrillville)
+            domain: Domain to generate dashboard for (required)
         """
+        if not domain:
+            return "❌ domain is required (e.g. 'myworkspace')"
+
         try:
             result = subprocess.run(
                 ["python3", "/data/repos/somnia/vigil/scripts/project_dashboard.py",
@@ -46,7 +49,7 @@ def register(mcp: FastMCP):
             return f"❌ Error: {e}"
 
     @mcp.tool()
-    def cost_savings_report_generate(domain: str = "burrillville") -> str:
+    def cost_savings_report_generate(domain: str = "") -> str:
         """Regenerate the cost & savings report for a domain.
 
         Queries Store for accomplishments with financial_impact populated, plus
@@ -54,8 +57,11 @@ def register(mcp: FastMCP):
         renders a portal-ready HTML report into the workspace's reports/ folder.
 
         Args:
-            domain: Domain to generate report for (default: burrillville)
+            domain: Domain to generate report for (required)
         """
+        if not domain:
+            return "❌ domain is required (e.g. 'myworkspace')"
+
         try:
             output_path = Path(f"/data/workspaces/{domain}/reports/cost-savings-report.html")
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,7 +76,7 @@ def register(mcp: FastMCP):
             if result.returncode != 0:
                 return f"❌ Cost savings report generation failed:\\n{result.stderr}"
 
-            portal_url = f"https://zanni.synology.me/portal/reports/{domain}/view?file=cost-savings-report.html"
+            portal_url = f"{PUBLIC_BASE_URL.rstrip('/output')}/portal/reports/{domain}/view?file=cost-savings-report.html"
             return (f"✅ Cost & savings report regenerated\\n"
                     f"{result.stdout.strip()}\\n"
                     f"📎 {portal_url}")
@@ -79,4 +85,3 @@ def register(mcp: FastMCP):
             return "❌ Cost savings report generation timed out (30s)"
         except Exception as e:
             return f"❌ Error: {e}"
-

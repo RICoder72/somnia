@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Burrillville Cost & Savings Report Generator
+Somnia Cost & Savings Report Generator
 
 Queries Store for accomplishments with financial_impact set, plus a hand-curated
 list of accomplishments that warrant financial assessment but don't have it yet,
 and renders a self-contained HTML report.
 
 Usage:
-    python3 scripts/cost_savings_report.py [--domain burrillville] [--output /path/to/file.html]
+    python3 scripts/cost_savings_report.py [--domain myworkspace] [--output /path/to/file.html]
 """
 
 import asyncio
@@ -604,7 +604,7 @@ render();
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Generate cost & savings report")
-    parser.add_argument("--domain", default="burrillville")
+    parser.add_argument("--domain", default="", help="Domain to generate report for (required)")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 

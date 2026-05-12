@@ -16,7 +16,7 @@ and any other communication channel associated with the project.
 ## Enforcement
 
 Unacceptable behavior can be reported to the project maintainer at
-matt@burrillvilleri.gov. Reports will be reviewed and responded to
+conduct@example.com. Reports will be reviewed and responded to
 as appropriate. The maintainer reserves the right to remove, edit,
 or reject contributions that violate this code of conduct.
 

@@ -15,13 +15,13 @@ adapters for that type must implement.
 `outlook` are both adapters for the `mail` service. `signal`, `twilio`,
 and `email` are adapters for `notify`.
 
-**Account** — a named, configured instance of an adapter. `zannim@bsd-ri.net`
+**Account** — a named, configured instance of an adapter. `user@example.com`
 is a mail account using the `gmail` adapter. You can have multiple accounts
 of the same adapter type (work Gmail, personal Gmail).
 
 **Binding** — a workspace's declaration of which account to use for a
-service type. The `burrillville` workspace binds `mail` to
-`zannim@bsd-ri.net`.
+service type. A workspace binds `mail` to a specific account like
+`user@example.com`.
 
 ## File Layout
 
@@ -80,14 +80,14 @@ outside the normal workspace context.
 ### Workspace Bindings
 
 ```yaml
-# workspaces/burrillville/bindings.yaml
+# workspaces/myworkspace/bindings.yaml
 version: 1
 identity:
-  mail: zannim@bsd-ri.net       # Use this specific account
-  calendar: zannim@bsd-ri.net
-  contacts: zannim@bsd-ri.net
+  mail: user@example.com          # Use this specific account
+  calendar: user@example.com
+  contacts: user@example.com
   storage: personal
-  notify: global                # Defer to global default
+  notify: global                  # Defer to global default
 ```
 
 Special values:
@@ -99,9 +99,9 @@ Fallback syntax for multiple allowed accounts:
 ```yaml
 identity:
   mail:
-    primary: zannim@bsd-ri.net
+    primary: user@example.com
     fallbacks:
-      - somnia.zanni@gmail.com
+      - personal@example.com
 ```
 
 Fallbacks are **not** automatic failover. Primary is always used unless
@@ -113,11 +113,11 @@ the caller passes `account=` explicitly with a fallback name.
 # config/global_bindings.yaml
 version: 1
 defaults:
-  mail: zannim@bsd-ri.net
-  calendar: zannim@bsd-ri.net
-  contacts: zannim@bsd-ri.net
+  mail: user@example.com
+  calendar: user@example.com
+  contacts: user@example.com
   storage: personal
-  notify: signal-matt
+  notify: signal-user
 ```
 
 These apply when no workspace is active, or when the workspace defers.
@@ -130,27 +130,27 @@ All accounts live in `config/hooks_registry.yaml`, grouped by service type:
 version: 1
 accounts:
   mail:
-    zannim@bsd-ri.net:
+    user@example.com:
       adapter: gmail
       credentials_ref: ""
       config:
         token_path: /data/tokens/gmail_token.json
-      display: "BIT Work Gmail"
+      display: "Work Gmail"
 
-    somnia.zanni@gmail.com:
+    personal@example.com:
       adapter: gmail
       credentials_ref: ""
       config:
-        token_path: /data/tokens/gmail_token_somnia.json
-      display: "Somnia Gmail"
+        token_path: /data/tokens/gmail_token_personal.json
+      display: "Personal Gmail"
 
   notify:
-    signal-matt:
+    signal-user:
       adapter: signal
       credentials_ref: ""
       config:
         api_url: http://signal-api:8080
-        sender: "+14013378064"
+        sender: "+15551234567"
       display: "Signal"
 ```
 
@@ -308,8 +308,8 @@ notify_routing:
   low:    [email]
 
 notify_default_recipient:
-  address: "+14014814468"
-  name: "Matt"
+  address: "+15551234567"
+  name: "User"
 ```
 
 The routing table uses **adapter types** (not account names) to determine

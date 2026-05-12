@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Burrillville Project Dashboard Generator
+Somnia Project Dashboard Generator
 
 Queries Store (PostgreSQL) for projects, contacts, and relationships,
 then generates a self-contained HTML dashboard and publishes it.
 
 Usage:
-    python3 scripts/project_dashboard.py [--domain burrillville] [--output /path/to/file.html]
+    python3 scripts/project_dashboard.py [--domain myworkspace] [--output /path/to/file.html]
 """
 
 import asyncio
@@ -570,7 +570,7 @@ render();
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Generate project dashboard")
-    parser.add_argument("--domain", default="burrillville")
+    parser.add_argument("--domain", default="", help="Domain to generate dashboard for (required)")
     parser.add_argument("--output", default=None, help="Output path (default: /data/outputs/project-dashboard.html)")
     args = parser.parse_args()
 

@@ -18,11 +18,13 @@ OUTPUTS_DIR = DATA_ROOT / "outputs"
 DOCKER_NETWORK = "mcp-net"
 
 # Public URL for published outputs (served via Somnia router)
-PUBLIC_BASE_URL = "https://zanni.synology.me/output"
+# Set SOMNIA_PUBLIC_URL to your host's base URL (e.g. https://myhost.example.com)
+_public_url = os.environ.get("SOMNIA_PUBLIC_URL", "http://localhost")
+PUBLIC_BASE_URL = f"{_public_url}/output"
 
 # Share publish system
 PUBLISH_DIR         = DATA_ROOT / "publish"          # /data/publish (shared volume)
-PUBLIC_SHARE_BASE_URL = "https://zanni.synology.me/p"  # public /p/{uuid} route
+PUBLIC_SHARE_BASE_URL = f"{_public_url}/p"  # public /p/{uuid} route
 
 # Domain config
 DOMAIN_TRIGGERS_FILE = CONFIG_DIR / "domain_triggers.json"

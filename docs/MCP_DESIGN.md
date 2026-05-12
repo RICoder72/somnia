@@ -134,4 +134,4 @@ read/write/dream loop working end-to-end first.
 ---
 
 *Documented: 2026-02-03*
-*Design conversation between Matthew and Claude*
+*Design conversation between the author and Claude*

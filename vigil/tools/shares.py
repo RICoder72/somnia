@@ -88,7 +88,7 @@ def register(mcp: FastMCP):
         Args:
             src:         Source file path (absolute, or relative to /data)
             subfolder:   Destination folder under /data/publish/ — use a short slug
-                         matching the project (e.g. "dcat", "burrillville")
+                         matching the project (e.g. "dcat", "myworkspace")
             filename:    Override output filename (default: source filename)
             expiry_days: Days until the share expires. Common values: 30, 60, 90.
         """
